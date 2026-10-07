@@ -25,7 +25,9 @@ services:
     container_name: cdripper-web
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:8080"   # nur von diesem Rechner erreichbar
+      # Standard: nur von diesem Rechner erreichbar. Fuer einen Server im Heimnetz WEB_BIND=0.0.0.0 setzen
+      # (Datei .env neben dieser Datei). Achtung: Die Oberflaeche hat keine Anmeldung.
+      - "${WEB_BIND:-127.0.0.1}:${WEB_PORT:-8080}:8080"
     volumes:
       - ./musik:/output          # derselbe Ordner wie beim Ripper
       - ./config:/config         # hier werden die Einstellungen gespeichert

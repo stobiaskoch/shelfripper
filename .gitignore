@@ -5,6 +5,7 @@ musik/
 musik-mp3/
 archiv/
 start-log.txt
+.env
 
 # Clutter
 __pycache__/
