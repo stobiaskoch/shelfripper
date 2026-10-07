@@ -15,6 +15,7 @@ import logging.handlers
 import os
 import re
 import time
+import unicodedata
 import uuid
 from pathlib import Path
 from urllib.parse import urlparse
@@ -40,7 +41,9 @@ except ImportError:
 OUTPUT = Path(os.environ.get("OUTPUT_DIR", "/output")).resolve()
 CONFIG = Path(os.environ.get("CONFIG_DIR", "/config"))
 DISCOGS_API = os.environ.get("DISCOGS_API", "https://api.discogs.com").rstrip("/")
-USER_AGENT = "cdripper-web/1.0"
+USER_AGENT = "shelfripper/1.0 (https://github.com/stobiaskoch/shelfripper)"
+MUSICBRAINZ_API = os.environ.get("MUSICBRAINZ_API", "https://musicbrainz.org/ws/2").rstrip("/")
+COVERART_API = os.environ.get("COVERART_API", "https://coverartarchive.org").rstrip("/")
 STATUS_FILE = OUTPUT / ".cdripper" / "status.json"
 FORMAT_FILE = OUTPUT / ".cdripper" / "format"  # liest der Ripper vor jeder CD
 CANCEL_FILE = OUTPUT / ".cdripper" / "cancel"  # darauf achtet der Ripper waehrend eines Rips
@@ -1661,6 +1664,84 @@ def archive_album(directory):
     return {"files": len(files), "bytes": total, "target": rel.as_posix(), "verified": verify}
 
 
+# ---------------------------------------------------------------- Cover nach dem Rip von selbst holen
+
+def _plain(text):
+    """Zum Vergleichen: nur Buchstaben und Ziffern, klein geschrieben."""
+    return re.sub(r"[^0-9a-z]+", "", unicodedata.normalize("NFKD", str(text or "")).casefold())
+
+
+def musicbrainz_cover(artist, album, tracks):
+    """Frontcover zu einem Album aus dem Cover Art Archive holen (ueber die MusicBrainz-Suche). None, wenn es keins gibt."""
+    quote = lambda text: re.sub(r'(["\\])', r"\\\1", text)
+    query = f'release:"{quote(album)}"'
+    if artist and _plain(artist) != "variousartists":
+        query += f' AND artist:"{quote(artist)}"'
+    headers = {"User-Agent": USER_AGENT, "Accept": "application/json"}
+    resp = requests.get(f"{MUSICBRAINZ_API}/release/", params={"query": query, "fmt": "json", "limit": 15}, headers=headers, timeout=20)
+    resp.raise_for_status()
+    releases = [r for r in resp.json().get("releases", [])
+                if int(str(r.get("score", 0)) or 0) >= 90 and _plain(r.get("title")) == _plain(album)]
+    # Ausgaben mit derselben Titelzahl zuerst: das ist am ehesten genau diese CD
+    releases.sort(key=lambda r: r.get("track-count") != tracks)
+    urls = [f"{COVERART_API}/release/{r['id']}/front-500" for r in releases[:4] if r.get("id")]
+    groups = list(dict.fromkeys(r["release-group"]["id"] for r in releases if (r.get("release-group") or {}).get("id")))
+    urls += [f"{COVERART_API}/release-group/{g}/front-500" for g in groups[:1]]
+    for url in urls:
+        time.sleep(1.1)  # MusicBrainz bittet um hoechstens eine Anfrage pro Sekunde
+        image = requests.get(url, headers={"User-Agent": USER_AGENT}, timeout=30)
+        mime = image.headers.get("Content-Type", "").split(";")[0].strip().lower()
+        if image.status_code == 200 and mime.startswith("image/") and 0 < len(image.content) <= MAX_DOWNLOAD_BYTES:
+            return image.content, mime
+    return None
+
+
+def embed_cover(directory, cover):
+    """Cover in alle Titel eines Albums schreiben und als Bilddatei daneben legen."""
+    for _number, disc_dir, files in album_discs(directory):
+        for path in files:
+            if path.suffix.lower() == ".mp3":
+                try:
+                    tags = ID3(path)
+                except ID3NoHeaderError:
+                    tags = ID3()
+                tags.delall("APIC")
+                tags.add(APIC(encoding=3, mime=cover[1], type=3, desc="Cover", data=cover[0]))
+                tags.save(path, v2_version=3)
+            else:
+                audio = FLAC(path)
+                picture = Picture()
+                picture.type, picture.mime, picture.data = 3, cover[1], cover[0]
+                audio.clear_pictures()
+                audio.add_picture(picture)
+                audio.save()
+    write_cover_file(directory, cover)
+
+
+def auto_cover(disc_id):
+    """Nach einem fertigen Rip: fehlt der erkannten CD ein Cover, eins aus dem Cover Art Archive holen."""
+    if not disc_id:
+        return False
+    album = next((a for a in scan_albums() if a["disc_id"] == disc_id), None)
+    if album is None or album["unknown"] or album["incomplete"] or album["busy"]:
+        return False
+    directory = OUTPUT / album["path"]
+    try:
+        if album_cover(directory):
+            return False
+        cover = musicbrainz_cover(album["artist"], album["album"], album["tracks"])
+        if not cover:
+            app.logger.warning("Kein Cover im Cover Art Archive für %s", album["path"])
+            return False
+        data, mime, _size = shrink_cover(cover)
+        embed_cover(directory, (data, mime))
+        app.logger.warning("Cover automatisch geholt für %s", album["path"])
+        return True
+    except Exception as err:
+        app.logger.warning("Cover für %s nicht automatisch ladbar: %r", album["path"], err)
+        return False
+
+
 # ---------------------------------------------------------------- Automatisch archivieren nach dem Rip
 
 AUTO_EVENT = {"id": 0, "ok": True, "message": "", "album": ""}  # letztes Ergebnis, fuer die Meldung in der Oberflaeche
@@ -1700,6 +1781,7 @@ def watch_ripper():
                 active_disc = status.get("disc_id") or active_disc
             elif active_disc:
                 disc, active_disc = active_disc, ""
+                auto_cover(disc)
                 auto_archive(disc)
         except Exception:
             app.logger.exception("Beobachten des Rippers fehlgeschlagen")
