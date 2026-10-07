@@ -1,0 +1,40 @@
+services:
+  cdripper:
+    build: .
+    image: cdripper:latest
+    container_name: cdripper
+    restart: unless-stopped
+
+    # Das optische Laufwerk in den Container durchreichen
+    devices:
+      - /dev/sr0:/dev/sr0
+
+    # Zielordner fuer die FLAC-Dateien (links anpassen)
+    volumes:
+      - ./musik:/output
+
+    environment:
+      DEVICE: /dev/sr0
+      POLL_INTERVAL: "5"   # Sekunden zwischen den Pruefungen
+      EJECT: "true"        # CD nach dem Rippen auswerfen
+
+  # Weboberflaeche: http://localhost:8080
+  web:
+    build: ./web
+    image: cdripper-web:latest
+    container_name: cdripper-web
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"   # nur von diesem Rechner erreichbar
+    volumes:
+      - ./musik:/output          # derselbe Ordner wie beim Ripper
+      - ./config:/config         # hier werden die Einstellungen gespeichert
+      # Archivordner: in der Weboberflaeche einstellbar. Die .bat-Dateien uebergeben den Pfad als ARCHIVE_DIR;
+      # ohne Angabe ist es der Ordner "archiv" neben dieser Datei.
+      - type: bind
+        source: ${ARCHIVE_DIR:-./archiv}
+        target: /archive
+        bind:
+          create_host_path: true
+    environment:
+      ARCHIVE_HOST_PATH: "${ARCHIVE_DIR:-}"

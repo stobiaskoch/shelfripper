@@ -1,0 +1,1274 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CD-Regal</title>
+<link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+<link rel="alternate icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
+<style>
+:root {
+  --shelf: #dfe5ea;
+  --case: #ffffff;
+  --ink: #17212b;
+  --soft: #5b6875;
+  --line: #c3ccd4;
+  --action: #1d55b3;
+  --action-ink: #ffffff;
+  --flag: #f4c21f;
+  --flag-ink: #3a2c00;
+  --ok: #1f7a55;
+  --bad: #b3261e;
+  --spine: "Bahnschrift", "DIN Alternate", "Roboto Condensed", "Arial Narrow", sans-serif;
+  --ui: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --shelf: #141b22; --case: #1f2932; --ink: #e9eef2; --soft: #9aa7b3; --line: #33414d;
+    --action: #7fb0ff; --action-ink: #0b1a30; --flag: #f4c21f; --flag-ink: #2b2000;
+    --ok: #5fcf9f; --bad: #ff8a80;
+  }
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--shelf); color: var(--ink); font: 15px/1.45 var(--ui); }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--action); outline-offset: 2px; }
+
+.app { display: grid; grid-template-columns: minmax(300px, 400px) 1fr; height: 100vh; }
+
+/* ---------- Regal (Liste) ---------- */
+.rack { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+.rack-head { padding: 18px 16px 12px; }
+.rack-head h1 { margin: 0 0 12px; font: 700 28px/1 var(--spine); font-stretch: 75%; letter-spacing: .01em; }
+.rack-tools { display: flex; gap: 8px; flex-wrap: wrap; }
+.rack-tools input { flex: 1 1 140px; min-width: 0; }
+.chips { display: flex; gap: 6px; margin-top: 10px; }
+.rip { margin: 0 10px 10px; padding: 10px 12px; background: var(--case); border: 1px solid var(--action); border-radius: 3px; }
+.rip[hidden] { display: none; }
+.rip-line { display: flex; justify-content: space-between; align-items: center; gap: 10px; min-height: 24px; }
+.rip-line b { font: 700 17px/1.2 var(--spine); font-stretch: 80%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rip-line span { color: var(--soft); font-size: 13.5px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar { height: 8px; margin: 7px 0; background: var(--shelf); border-radius: 4px; overflow: hidden; }
+.bar i { display: block; height: 100%; width: 0; background: var(--action); border-radius: 4px; transition: width .6s linear; }
+.bar.unknown i { width: 35%; animation: slide 1.6s ease-in-out infinite alternate; }
+@keyframes slide { from { margin-left: 0; } to { margin-left: 65%; } }
+@media (prefers-reduced-motion: reduce) { .bar i { transition: none; } .bar.unknown i { animation: none; margin-left: 32%; } }
+.btn.small { padding: 3px 10px; font-size: 13.5px; }
+.chip { border: 1px solid var(--line); background: transparent; border-radius: 999px; padding: 4px 12px; }
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--shelf); border-color: var(--ink); }
+.chip.flagged[aria-pressed="true"] { background: var(--flag); color: var(--flag-ink); border-color: var(--flag); }
+.spines { list-style: none; margin: 0; padding: 0 10px 16px; overflow-y: auto; flex: 1; }
+.spine {
+  display: grid; grid-template-columns: 10px 1fr auto; align-items: center; gap: 10px;
+  width: 100%; min-height: 46px; margin-bottom: 3px; padding: 6px 12px 6px 0;
+  background: var(--case); border: 1px solid var(--line); border-radius: 3px; text-align: left;
+}
+.spine::before { content: ""; align-self: stretch; margin: -6px 0; border-radius: 2px 0 0 2px; background: var(--line); }
+.spine { cursor: pointer; user-select: none; }
+.spine[draggable="true"] { cursor: grab; }
+.spine.dragging { opacity: .45; }
+.dragging-on .spine:not([data-drop="true"]):not(.dragging) { opacity: .45; }
+.spine.drop { border-color: var(--action); border-style: solid; box-shadow: inset 0 0 0 2px var(--action); }
+.spine.drop::before { background: var(--action); }
+.spine[aria-current="true"] { border-color: var(--action); box-shadow: inset 0 0 0 1px var(--action); }
+.spine[aria-current="true"]::before { background: var(--action); }
+.spine-text { min-width: 0; font-family: var(--spine); font-stretch: 80%; font-size: 17px; line-height: 1.15; }
+.spine-text > b, .spine-text > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.spine-text > span { color: var(--soft); font-size: 15px; margin-top: 2px; }
+.spine-meta { color: var(--soft); font-size: 13px; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Nicht erkannte CD: wie ein unbeschrifteter Rohling mit Klebezettel */
+.spine.unknown { border-style: dashed; }
+.spine.unknown::before { background: var(--flag); }
+.spine.unknown .spine-text b { font-style: italic; font-weight: 400; }
+.tag { display: inline-block; padding: 1px 8px; border-radius: 2px; font-size: 12.5px; font-weight: 600; }
+.tag.flag { background: var(--flag); color: var(--flag-ink); }
+.tag.busy { background: transparent; border: 1px solid var(--action); color: var(--action); }
+.tag.warn { background: transparent; border: 1px solid var(--bad); color: var(--bad); }
+.empty { padding: 24px 16px; color: var(--soft); }
+
+/* ---------- Detail ---------- */
+.detail { min-height: 0; overflow-y: auto; }
+.detail-inner { max-width: 940px; padding: 24px 28px 110px; }
+.back { display: none; }
+.album-head { display: grid; grid-template-columns: 168px 1fr; gap: 22px; align-items: start; }
+.cover { width: 168px; aspect-ratio: 1; background: var(--case); border: 1px solid var(--line); border-radius: 3px;
+  display: grid; place-items: center; overflow: hidden; color: var(--soft); font-size: 13px; text-align: center; }
+.cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cover-col { display: flex; flex-direction: column; gap: 8px; width: 168px; }
+.cover-col .btn { width: 100%; text-align: center; }
+.cover-col input[type=file] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+.cover-col label.btn:focus-within { outline: 2px solid var(--action); outline-offset: 2px; }
+.cover-col label.btn.off { opacity: .5; pointer-events: none; }
+.fields { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px 12px; }
+.field { display: flex; flex-direction: column; gap: 3px; grid-column: span 3; }
+.field.wide { grid-column: span 6; } .field.narrow { grid-column: span 2; } .field.tiny { grid-column: span 1; }
+.field label, .field span.l { font-size: 13px; color: var(--soft); }
+.secret { -webkit-text-security: disc; }
+input[type=text], input[type=search], input[type=password], input[type=number], select {
+  width: 100%; padding: 7px 9px; background: var(--case); border: 1px solid var(--line); border-radius: 3px;
+}
+input:disabled { opacity: .6; }
+h2 { font: 700 21px/1.2 var(--spine); font-stretch: 80%; margin: 30px 0 10px; }
+.notice { margin: 16px 0 0; padding: 10px 14px; border-left: 4px solid var(--flag); background: var(--case); border-radius: 0 3px 3px 0; }
+.notice.info { border-left-color: var(--action); }
+.notice.bad { border-left-color: var(--bad); }
+
+table.tracks { width: 100%; border-collapse: collapse; }
+.tracks th { text-align: left; font-weight: 400; font-size: 13px; color: var(--soft); padding: 0 6px 4px 0; }
+.tracks td { padding: 2px 6px 2px 0; vertical-align: middle; }
+.tracks td.play { width: 38px; }
+.playbtn { width: 32px; height: 32px; padding: 0; display: grid; place-items: center; background: var(--case);
+  border: 1px solid var(--line); border-radius: 50%; color: var(--ink); }
+.with-btn { display: flex; gap: 6px; }
+.with-btn input { flex: 1; min-width: 0; }
+.iconbtn { flex: none; width: 36px; padding: 0; display: grid; place-items: center; background: var(--case);
+  border: 1px solid var(--line); border-radius: 3px; color: var(--ink); }
+.iconbtn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; display: block; }
+.iconbtn:disabled { opacity: .5; cursor: default; }
+.playbtn svg { width: 12px; height: 12px; fill: currentColor; display: block; }
+.playbtn[aria-pressed="true"] { background: var(--action); border-color: var(--action); color: var(--action-ink); }
+.tracks td.num { width: 62px; } .tracks td.len { width: 96px; white-space: nowrap; color: var(--soft); font-variant-numeric: tabular-nums; text-align: right; padding-right: 0; }
+.tracks td.len .off { color: var(--bad); }
+.tracks th:last-child { text-align: right; padding-right: 0; }
+.tracks tr.disc-head th { text-align: left; padding: 18px 0 6px; color: var(--ink); font: 700 18px/1.2 var(--spine); font-stretch: 80%; border-bottom: 1px solid var(--line); }
+.tracks tr.disc-head:first-child th { padding-top: 4px; }
+.tracks tr.disc-head + tr td { padding-top: 8px; }
+.plain { margin: 0; padding: 8px 0; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+
+.btn { border: 1px solid var(--line); background: var(--case); border-radius: 3px; padding: 7px 14px; }
+.btn.primary { background: var(--action); border-color: var(--action); color: var(--action-ink); font-weight: 600; }
+.btn:disabled { opacity: .5; cursor: default; }
+.linkish { background: none; border: 0; padding: 0; color: var(--action); text-decoration: underline; }
+
+.search-row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.search-row input[type=search] { flex: 1 1 260px; }
+.search-row label { color: var(--soft); white-space: nowrap; }
+.results { list-style: none; padding: 0; margin: 12px 0 0; }
+.result { display: grid; grid-template-columns: 56px 1fr; gap: 12px; align-items: center; width: 100%; text-align: left;
+  background: var(--case); border: 1px solid var(--line); border-radius: 3px; padding: 6px 12px 6px 6px; margin-bottom: 3px; }
+.result[aria-current="true"] { border-color: var(--action); box-shadow: inset 0 0 0 1px var(--action); }
+.result img, .result .noimg { width: 56px; height: 56px; object-fit: cover; background: var(--shelf); border-radius: 2px; display: block; }
+.result b { display: block; font-family: var(--spine); font-stretch: 80%; font-size: 17px; }
+.result small { color: var(--soft); font-size: 13.5px; }
+
+.savebar { position: fixed; right: 0; bottom: 0; left: min(400px, 40vw); display: none; gap: 12px; align-items: center; justify-content: flex-end;
+  padding: 12px 28px; background: var(--case); border-top: 1px solid var(--line); }
+.savebar.on { display: flex; }
+.savebar p { margin: 0 auto 0 0; color: var(--soft); }
+.toast { position: fixed; left: 50%; bottom: 76px; transform: translateX(-50%); background: var(--ink); color: var(--shelf);
+  padding: 9px 18px; border-radius: 3px; display: none; max-width: 90vw; }
+.toast.on { display: block; }
+.toast.bad { background: var(--bad); color: #fff; }
+
+dialog { border: 1px solid var(--line); border-radius: 4px; background: var(--case); color: var(--ink); padding: 22px; width: min(520px, 92vw); }
+dialog::backdrop { background: rgba(10, 16, 22, .55); }
+dialog h2 { margin-top: 0; }
+.choice { border: 0; padding: 0; margin: 0 0 18px; }
+.choice legend { padding: 0; font-size: 13px; color: var(--soft); margin-bottom: 4px; }
+.choice label { display: inline-block; margin-right: 18px; }
+.choice p, .hint { margin: 6px 0 0; color: var(--soft); font-size: 13.5px; }
+.hint.bad { color: var(--bad); font-weight: 600; }
+dialog .row { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+a { color: var(--action); }
+
+@media (max-width: 820px) {
+  .app { grid-template-columns: 1fr; }
+  .rack { border-right: 0; }
+  .app.show-detail .rack { display: none; }
+  .app:not(.show-detail) .detail { display: none; }
+  .back { display: inline-block; margin-bottom: 14px; }
+  .detail-inner { padding: 16px 16px 120px; }
+  .album-head { grid-template-columns: 1fr; }
+  .cover, .cover-col { width: 132px; }
+  .field, .field.narrow { grid-column: span 6; } .field.tiny { grid-column: span 3; }
+  .savebar { left: 0; padding: 10px 16px; }
+  .tracks td.len { display: none; } .tracks thead th:last-child { display: none; }
+}
+/* ---------- Ergänzungen: Interpreten-Gruppen, Album-Aktionen ---------- */
+.artist-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 12px 4px 5px;
+  font: 700 17px/1.2 var(--spine); font-stretch: 80%; }
+.artist-head span { font: 400 13px/1.2 var(--ui); color: var(--soft); white-space: nowrap; }
+.spines li:first-child.artist-head { padding-top: 2px; }
+.spine.sub { width: calc(100% - 16px); margin-left: 16px; min-height: 40px; }
+.fields[hidden] { display: none; }
+.album-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+a.btn { display: inline-block; text-decoration: none; color: var(--ink); }
+a.btn[aria-disabled="true"] { opacity: .5; pointer-events: none; }
+.rack-foot { padding: 10px 16px 14px; border-top: 1px solid var(--line); }
+.rack-foot .btn { width: 100%; }
+.spines { flex: 1 1 auto; }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="rack">
+    <div class="rack-head">
+      <h1 data-i18n="CD-Regal"></h1>
+      <div class="rack-tools">
+        <input type="search" id="filter" name="regal-filter" data-i18n-ph="Im Regal suchen" data-i18n-label="Im Regal suchen" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+        <button class="btn" id="open-settings" data-i18n="Einstellungen"></button>
+      </div>
+      <div class="chips">
+        <button class="chip" id="chip-all" aria-pressed="true"></button>
+        <button class="chip flagged" id="chip-unknown" aria-pressed="false"></button>
+      </div>
+    </div>
+    <section class="rip" id="rip" hidden aria-live="polite">
+      <div class="rip-line"><b id="rip-name"></b></div>
+      <div class="rip-line"><span id="rip-title"></span><span id="rip-count"></span></div>
+      <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" id="rip-bar"><i></i></div>
+      <div class="rip-line"><span id="rip-what"></span><button class="btn small" id="rip-cancel" data-i18n="Rip abbrechen"></button></div>
+    </section>
+    <ul class="spines" id="spines"></ul>
+    <div class="rack-foot"><button type="button" class="btn" id="archive-all"></button></div>
+  </aside>
+  <main class="detail" id="detail"></main>
+</div>
+
+<div class="savebar" id="savebar">
+  <p id="savebar-text"></p>
+  <button class="btn" id="discard" data-i18n="Verwerfen"></button>
+  <button class="btn primary" id="save"></button>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<dialog id="attach">
+  <h2 data-i18n="CD zum Album hinzufügen"></h2>
+  <p id="attach-text"></p>
+  <div class="field narrow">
+    <label for="attach-number" data-i18n="Hinzufügen als"></label>
+    <select id="attach-number"></select>
+  </div>
+  <p id="attach-reason" class="hint"></p>
+  <p id="attach-discogs-row" style="margin:14px 0 0"><label><input type="checkbox" id="attach-discogs" checked> <span data-i18n="Titelnamen dieser CD von Discogs übernehmen"></span></label></p>
+  <p id="attach-error" class="hint bad"></p>
+  <div class="row">
+    <button class="btn" id="attach-cancel" data-i18n="Abbrechen"></button>
+    <button class="btn primary" id="attach-ok" data-i18n="Hinzufügen"></button>
+  </div>
+</dialog>
+
+<dialog id="settings">
+  <h2 data-i18n="Einstellungen"></h2>
+  <fieldset class="choice">
+    <legend data-i18n="Sprache"></legend>
+    <label><input type="radio" name="language" value="de"> Deutsch</label>
+    <label><input type="radio" name="language" value="en"> English</label>
+  </fieldset>
+  <fieldset class="choice">
+    <legend data-i18n="Format neuer Rips"></legend>
+    <label><input type="radio" name="format" value="flac"> FLAC</label>
+    <label><input type="radio" name="format" value="mp3"> MP3</label>
+    <p id="format-hint"></p>
+  </fieldset>
+  <fieldset class="choice">
+    <legend data-i18n="Albumordner"></legend>
+    <label><input type="checkbox" id="year-prefix"> <span data-i18n="Jahr voranstellen, zum Beispiel „1992 - Into The Web“"></span></label>
+    <p data-i18n="Gilt für neue Rips und benennt die vorhandenen Albumordner um, sofern in ihren Tags ein Jahr steht. Abschalten macht es rückgängig."></p>
+  </fieldset>
+  <div class="field wide">
+    <label for="archive-path" data-i18n="Archivordner"></label>
+    <input type="text" id="archive-path" name="archivordner" placeholder="E:\Musikarchiv  /  \\server\freigabe\ordner" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+  </div>
+  <p class="hint" data-i18n="Ordner auf diesem Rechner (E:\Musikarchiv) oder Netzwerkfreigabe (\\server\freigabe\ordner). Leer lassen für den Ordner „archiv“ im cdripper-Ordner."></p>
+  <div class="fields" id="archive-login" style="margin-top:10px">
+    <div class="field"><label for="archive-user" data-i18n="Benutzer der Freigabe"></label>
+      <input type="text" id="archive-user" name="freigabe-benutzer" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></div>
+    <div class="field"><label for="archive-password" data-i18n="Kennwort der Freigabe"></label>
+      <input type="text" id="archive-password" name="freigabe-kennwort" class="secret" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"></div>
+  </div>
+  <p style="margin:10px 0 0; display:flex; gap:10px; align-items:center; flex-wrap:wrap">
+    <button type="button" class="btn small" id="archive-test" data-i18n="Verbindung testen"></button>
+    <span id="archive-state" class="hint" style="margin:0"></span>
+  </p>
+  <fieldset class="choice" style="margin-top:14px">
+    <legend data-i18n="Archivieren"></legend>
+    <label><input type="checkbox" id="archive-verify"> <span data-i18n="Kopien per Prüfsumme mit dem Original vergleichen"></span></label>
+    <p data-i18n="Jede Datei wird nach dem Kopieren aus dem Archiv zurückgelesen. Sicherer, dauert aber etwa doppelt so lang. Gelöscht wird im Regal in jedem Fall erst, wenn alles ohne Fehler kopiert ist."></p>
+    <label><input type="checkbox" id="archive-auto"> <span data-i18n="Erkannte CDs nach dem Rippen automatisch ins Archiv verschieben"></span></label>
+    <p data-i18n="Nur wenn die CD erkannt und vollständig gerippt wurde. Nicht erkannte CDs und CDs, die zu einem Album mit mehreren CDs gehören, bleiben im Regal."></p>
+  </fieldset>
+  <p style="margin-bottom:18px"></p>
+  <div class="field wide">
+    <label for="token" data-i18n="Discogs-Token"></label>
+    <input type="text" id="token" name="discogs-zugriffstoken" class="secret" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+  </div>
+  <p id="token-state" class="hint"></p>
+  <p class="hint" id="token-help"></p>
+  <p id="settings-error" class="hint bad"></p>
+  <div class="row">
+    <button class="btn" id="settings-cancel" data-i18n="Abbrechen"></button>
+    <button class="btn primary" id="settings-save" data-i18n="Einstellungen speichern"></button>
+  </div>
+</dialog>
+
+<script>
+const $ = (s, el = document) => el.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const fmt = sec => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}`;
+const toSec = t => { const m = /^(\d+):(\d{1,2})(?::(\d{2}))?$/.exec((t || "").trim()); return !m ? null : m[3] ? +m[1] * 3600 + +m[2] * 60 + +m[3] : +m[1] * 60 + +m[2]; };
+
+const state = {
+  lang: "de", albums: [], onlyUnknown: false, filter: "",
+  path: null, form: null, dirty: false, saving: false, archiving: false,
+  playing: null, tokenSet: false, format: "flac", mp3Available: false, yearPrefix: false, archive: {},
+  results: null, searching: false, release: null, disc: 0, query: "", onlyCd: true, searchError: "",
+};
+
+/* ---------- Sprache ----------
+   Die Texte stehen im Code auf Deutsch; t() liefert bei englischer Oberfläche die Übersetzung aus EN.
+   {name} wird durch den übergebenen Wert ersetzt. */
+const EN = {
+  "CD-Regal": "CD Shelf",
+  "Im Regal suchen": "Search the shelf",
+  "Einstellungen": "Settings",
+  "Rip abbrechen": "Cancel rip",
+  "Verwerfen": "Discard",
+  "Abbrechen": "Cancel",
+  "Hinzufügen": "Add",
+  "CD zum Album hinzufügen": "Add CD to album",
+  "Hinzufügen als": "Add as",
+  "Titelnamen dieser CD von Discogs übernehmen": "Take this CD's track names from Discogs",
+  "Sprache": "Language",
+  "Format neuer Rips": "Format of new rips",
+  "Albumordner": "Album folders",
+  "Jahr voranstellen, zum Beispiel „1992 - Into The Web“": "Put the year first, for example “1992 - Into The Web”",
+  "Gilt für neue Rips und benennt die vorhandenen Albumordner um, sofern in ihren Tags ein Jahr steht. Abschalten macht es rückgängig.":
+    "Applies to new rips and renames the existing album folders, provided their tags contain a year. Switching it off undoes this.",
+  "Archivordner": "Archive folder",
+  "Ordner auf diesem Rechner (E:\\Musikarchiv) oder Netzwerkfreigabe (\\\\server\\freigabe\\ordner). Leer lassen für den Ordner „archiv“ im cdripper-Ordner.":
+    "Folder on this computer (E:\\MusicArchive) or network share (\\\\server\\share\\folder). Leave empty for the folder “archiv” inside the cdripper folder.",
+  "Benutzer der Freigabe": "User of the share",
+  "Kennwort der Freigabe": "Password of the share",
+  "Verbindung testen": "Test connection",
+  "Prüft": "Checking",
+  "Die Freigabe ist erreichbar und beschreibbar.": "The share can be reached and is writable.",
+  "Der Archivordner ist beschreibbar.": "The archive folder is writable.",
+  "Netzwerkfreigabe, wird direkt angesprochen.": "Network share, accessed directly.",
+  "Es ist ein Kennwort gespeichert. Leer lassen, um es zu behalten.": "A password is stored. Leave empty to keep it.",
+  "Discogs-Token": "Discogs token",
+  "Einstellungen speichern": "Save settings",
+  "Das Token erzeugst du kostenlos unter {link} mit „Generate new token“.": "You create the token for free at {link} with “Generate new token”.",
+  "Fehler {n}": "Error {n}",
+  "Alle ({n})": "All ({n})",
+  "Nicht erkannt ({n})": "Not identified ({n})",
+  "Alle CDs im Regal sind erkannt.": "All CDs on the shelf are identified.",
+  "Nichts gefunden.": "Nothing found.",
+  "Das Regal ist noch leer. Leg eine Audio-CD ein, dann erscheint sie hier.": "The shelf is still empty. Insert an audio CD and it will appear here.",
+  "wird gerippt": "ripping",
+  "unvollständig": "incomplete",
+  "nicht erkannt": "not identified",
+  "Unbeschriftete CD": "Unlabelled CD",
+  "Disc-ID {id}": "Disc ID {id}",
+  "Ohne Interpret": "No artist",
+  "Ohne Albumtitel": "No album title",
+  "Zum Hinzufügen auf ein Album ziehen": "Drag onto an album to add it",
+  "{n} Alben": "{n} albums",
+  "{n} CDs, ": "{n} CDs, ",
+  "{n} Titel": "{n} tracks",
+  "1 Titel": "1 track",
+  "{a} von {b} Titel": "{a} of {b} tracks",
+  "Unbekannte CD": "Unknown CD",
+  "Audio-CD": "Audio CD",
+  "Rip wird abgebrochen": "Cancelling rip",
+  "Wird in MP3 umgewandelt": "Converting to MP3",
+  "CD wird ausgelesen": "Reading CD",
+  "Titel {a} von {b}": "Track {a} of {b}",
+  "Den laufenden Rip abbrechen? Die bereits ausgelesenen Titel dieser CD werden verworfen und die CD wird ausgeworfen.":
+    "Cancel the running rip? The tracks already read from this CD are discarded and the CD is ejected.",
+  "Rip wird abgebrochen, die CD wird gleich ausgeworfen": "Cancelling the rip, the CD will be ejected shortly",
+  "Anhalten": "Pause",
+  "Abspielen": "Play",
+  "{action}: Titel {n}": "{action}: track {n}",
+  "Dieser Titel lässt sich im Browser nicht abspielen.": "This track cannot be played in the browser.",
+  "Ungespeicherte Änderungen verwerfen?": "Discard unsaved changes?",
+  "Wähl links eine CD aus, um ihre Tags zu bearbeiten.": "Pick a CD on the left to edit its tags.",
+  "Neues Cover, noch nicht gespeichert": "New cover, not saved yet",
+  "Cover von Discogs": "Cover from Discogs",
+  "Kein Cover": "No cover",
+  "Eine CD dieses Albums wird gerade gerippt. Bearbeiten kannst du das Album, sobald der Rip fertig ist.":
+    "One CD of this album is being ripped right now. You can edit the album once the rip has finished.",
+  "Diese CD wird gerade gerippt. Bearbeiten kannst du sie, sobald der Rip fertig ist.":
+    "This CD is being ripped right now. You can edit it once the rip has finished.",
+  "MusicBrainz kennt diese CD nicht. Such sie unten bei Discogs und übernimm die Daten.":
+    "MusicBrainz does not know this CD. Search for it on Discogs below and take over the data.",
+  "Der Rip ist unvollständig: {a} von {b} Titeln vorhanden.": "The rip is incomplete: {a} of {b} tracks present.",
+  "Mindestens eine CD dieses Albums ist unvollständig gerippt.": "At least one CD of this album was ripped incompletely.",
+  "Die Titelzahlen passen nicht zu dieser Ausgabe: {list}. Wahrscheinlich ist das eine andere Ausgabe.":
+    "The track counts do not match this release: {list}. This is probably a different release.",
+  "CD{n} hat {a} Titel, Discogs führt {b}": "CD{n} has {a} tracks, Discogs lists {b}",
+  "Daten von Discogs für alle {n} CDs eingetragen, aber noch nicht gespeichert. Prüf die Titel und speichere dann.":
+    "Data from Discogs entered for all {n} CDs, but not saved yet. Check the tracks, then save.",
+  "Daten von Discogs eingetragen, aber noch nicht gespeichert. Prüf die Titel und speichere dann.":
+    "Data from Discogs entered, but not saved yet. Check the tracks, then save.",
+  "Die Titelzahl passt nicht: Discogs führt {a} Titel, gerippt wurden {b}. Wahrscheinlich ist das eine andere Ausgabe.":
+    "The track count does not match: Discogs lists {a} tracks, {b} were ripped. This is probably a different release.",
+  "Welche CD dieser Ausgabe?": "Which CD of this release?",
+  "Nummer": "Number",
+  "Titel {n}": "Track {n}",
+  "Interpret Titel {n}": "Artist of track {n}",
+  "Länge laut Discogs": "Length according to Discogs",
+  "Zurück zum Regal": "Back to the shelf",
+  "In Archiv verschieben": "Move to archive",
+  "Als ZIP herunterladen": "Download as ZIP",
+  "Wird kopiert": "Copying",
+  "Alle ins Archiv verschieben": "Move all to archive",
+  "Verschiebe {i} von {n}": "Moving {i} of {n}",
+  "{n} Alben ins Archiv verschieben?": "Move {n} albums to the archive?",
+  "Jedes Album wird kopiert, per Prüfsumme geprüft und erst danach hier im Regal gelöscht.":
+    "Each album is copied, verified by checksum, and only then deleted here on the shelf.",
+  "Jedes Album wird kopiert und danach hier im Regal gelöscht. Die Prüfung per Prüfsumme ist abgeschaltet.":
+    "Each album is copied and then deleted here on the shelf. Checksum verification is switched off.",
+  "{n} nicht erkannte oder unvollständige CDs bleiben im Regal.": "{n} unrecognized or incomplete CDs stay on the shelf.",
+  "Ziel: {dest}": "Destination: {dest}",
+  "{done} Alben verschoben, {bad} nicht: {why}": "{done} albums moved, {bad} not: {why}",
+  "{n} Alben ins Archiv verschoben": "{n} albums moved to the archive",
+  "„{album}“ wurde automatisch ins Archiv verschoben": "“{album}” was moved to the archive automatically",
+  "„{album}“ konnte nicht automatisch archiviert werden: {why}": "“{album}” could not be archived automatically: {why}",
+  "Archivieren": "Archiving",
+  "Kopien per Prüfsumme mit dem Original vergleichen": "Compare copies with the original by checksum",
+  "Jede Datei wird nach dem Kopieren aus dem Archiv zurückgelesen. Sicherer, dauert aber etwa doppelt so lang. Gelöscht wird im Regal in jedem Fall erst, wenn alles ohne Fehler kopiert ist.":
+    "Every file is read back from the archive after copying. Safer, but takes about twice as long. Either way, nothing is deleted from the shelf until everything has been copied without errors.",
+  "Erkannte CDs nach dem Rippen automatisch ins Archiv verschieben": "Automatically move recognized CDs to the archive after ripping",
+  "Nur wenn die CD erkannt und vollständig gerippt wurde. Nicht erkannte CDs und CDs, die zu einem Album mit mehreren CDs gehören, bleiben im Regal.":
+    "Only if the CD was recognized and ripped completely. Unrecognized CDs and CDs that belong to a multi-disc album stay on the shelf.",
+  "„{album}“ ins Archiv verschieben?\n\nDas Album wird kopiert und danach hier im Regal gelöscht. Die Prüfung per Prüfsumme ist abgeschaltet.\n\nZiel: {dest}":
+    "Move “{album}” to the archive?\n\nThe album is copied and then deleted here on the shelf. Checksum verification is switched off.\n\nDestination: {dest}",
+  "Ins Archiv verschoben, ohne Prüfung ({n} Dateien, {mb} MB)": "Moved to the archive without verification ({n} files, {mb} MB)",
+  "Wird kopiert und geprüft": "Copying and verifying",
+  "Cover suchen": "Search cover",
+  "Bild hochladen": "Upload image",
+  "Oder ein Bild oder seine Adresse kopieren und hier mit Strg+V einfügen.": "Or copy an image or its address and paste it here with Ctrl+V.",
+  "Interpret": "Artist",
+  "Interpret für alle Titel übernehmen": "Apply artist to all tracks",
+  "Album": "Album",
+  "Jahr": "Year",
+  "Genre": "Genre",
+  "Umfang": "Size",
+  "{n} CDs": "{n} CDs",
+  "CD": "CD",
+  "von": "of",
+  "Label": "Label",
+  "Katalognummer": "Catalogue number",
+  "Gehört die CD zu einem Album mit mehreren CDs? Trag bei „CD“ ihre Nummer und bei „von“ die Gesamtzahl ein, dann wird sie beim Speichern in das Album einsortiert.":
+    "Does the CD belong to an album with several CDs? Enter its number under “CD” and the total under “of”, and it will be filed into the album when you save.",
+  "Titel": "Tracks",
+  "Nr.": "No.",
+  "Länge": "Length",
+  "Bei Discogs suchen": "Search Discogs",
+  "Für die Suche fehlt noch dein Discogs-Token.": "Your Discogs token is still missing for the search.",
+  "Token eintragen": "Enter token",
+  "Interpret und Album, Katalognummer oder Barcode": "Artist and album, catalogue number or barcode",
+  "Discogs-Suche": "Discogs search",
+  "nur CDs": "CDs only",
+  "Suche läuft": "Searching",
+  "Suchen": "Search",
+  "Discogs findet dazu nichts. Probier weniger Wörter oder die Katalognummer von der CD-Hülle.":
+    "Discogs finds nothing for this. Try fewer words or the catalogue number from the CD case.",
+  "Speichert": "Saving",
+  "Tags speichern": "Save tags",
+  "Discogs-Daten noch nicht gespeichert": "Discogs data not saved yet",
+  "Ungespeicherte Änderungen": "Unsaved changes",
+  "Diese Discogs-Ausgabe hat keine Titelliste.": "This Discogs release has no track list.",
+  "Die unbeschriftete CD": "The unlabelled CD",
+  "{what} ({n} Titel) wird Teil von „{album}“ von {artist}.": "{what} ({n} tracks) becomes part of “{album}” by {artist}.",
+  " Die bisherige CD dieses Albums wird dabei zu CD{n}.": " The album's existing CD becomes CD{n} in the process.",
+  " (schon vorhanden)": " (already present)",
+  "Vorschlag: {reason}": "Suggestion: {reason}",
+  "Fügt hinzu": "Adding",
+  "Als CD{n} hinzugefügt": "Added as CD{n}",
+  "Trag zuerst oben einen Interpreten ein.": "Enter an artist above first.",
+  "Interpret für alle {n} Titel übernommen": "Artist applied to all {n} tracks",
+  "Diese Datei ist kein lesbares Bild.": "This file is not a readable image.",
+  "Ins CD-Regal übernehmen": "Send to CD Shelf",
+  "Der Browser hat das Suchfenster blockiert. Bitte Pop-ups für diese Seite erlauben.": "The browser blocked the search window. Please allow pop-ups for this page.",
+  "Lädt das Bild": "Loading the image",
+  "Cover übernommen. Es wird mit „Tags speichern“ geschrieben.": "Cover taken over. It is written with “Save tags”.",
+  "Das Cover gehört zu einem anderen Album als dem geöffneten und wurde nicht übernommen.":
+    "The cover belongs to a different album than the open one and was not taken over.",
+  "Tags gespeichert": "Tags saved",
+  "Bitte zuerst die ungespeicherten Änderungen speichern.": "Please save the unsaved changes first.",
+  "„{album}“ ins Archiv verschieben?\n\nDas Album wird kopiert, jede Datei per Prüfsumme geprüft und erst danach hier im Regal gelöscht.\n\nZiel: {dest}":
+    "Move “{album}” to the archive?\n\nThe album is copied, every file is verified by checksum, and only then deleted here on the shelf.\n\nDestination: {dest}",
+  "Ordner „archiv“ im cdripper-Ordner": "folder “archiv” inside the cdripper folder",
+  "Ins Archiv verschoben und geprüft ({n} Dateien, {mb} MB)": "Moved to the archive and verified ({n} files, {mb} MB)",
+  "Es ist bereits ein Token gespeichert. Lass das Feld leer, um es zu behalten.": "A token is already stored. Leave the field empty to keep it.",
+  "Noch kein Token gespeichert.": "No token stored yet.",
+  "Gilt ab der nächsten CD. FLAC ist verlustfrei, MP3 braucht etwa ein Viertel des Platzes.":
+    "Applies from the next CD. FLAC is lossless, MP3 needs about a quarter of the space.",
+  "Für MP3 muss der Ripper einmal neu gebaut werden (update.bat im cdripper-Ordner).":
+    "For MP3 the ripper has to be rebuilt once (update.bat in the cdripper folder).",
+  "Aktiv: {p}": "Active: {p}",
+  "Noch nicht aktiv. Führe update.bat im cdripper-Ordner aus, damit der neue Ordner eingebunden wird. Bis dahin gilt: {p}":
+    "Not active yet. Run update.bat in the cdripper folder so the new folder gets mounted. Until then this applies: {p}",
+  "Der Archivordner ist noch nicht eingebunden. Führe einmal update.bat im cdripper-Ordner aus.":
+    "The archive folder is not mounted yet. Run update.bat in the cdripper folder once.",
+  "Prüft Token bei Discogs": "Checking token with Discogs",
+  "Einstellungen gespeichert": "Settings saved",
+  "Einstellungen gespeichert. Das Token ist gültig.": "Settings saved. The token is valid.",
+  "Einstellungen gespeichert. Das Token ist gültig (Discogs-Konto {user}).": "Settings saved. The token is valid (Discogs account {user}).",
+  "Einstellungen gespeichert. Der neue Archivordner gilt, sobald du update.bat ausgeführt hast.":
+    "Settings saved. The new archive folder applies once you have run update.bat.",
+};
+
+function t(de, vars) {
+  let text = state.lang === "en" && EN[de] !== undefined ? EN[de] : de;
+  if (vars) for (const key in vars) text = text.split(`{${key}}`).join(vars[key]);
+  return text;
+}
+const tracksText = n => n === 1 ? t("1 Titel") : t("{n} Titel", { n });
+
+// Feste Texte der Seite (Überschriften, Knöpfe, Dialoge) in der gewählten Sprache eintragen
+function applyStaticTexts() {
+  document.documentElement.lang = state.lang;
+  document.title = t("CD-Regal");
+  document.querySelectorAll("[data-i18n]").forEach(el => { el.textContent = t(el.dataset.i18n); });
+  document.querySelectorAll("[data-i18n-ph]").forEach(el => { el.placeholder = t(el.dataset.i18nPh); });
+  document.querySelectorAll("[data-i18n-label]").forEach(el => { el.setAttribute("aria-label", t(el.dataset.i18nLabel)); });
+  $("#token-help").innerHTML = esc(t("Das Token erzeugst du kostenlos unter {link} mit „Generate new token“.")).replace("{link}",
+    '<a href="https://www.discogs.com/settings/developers" target="_blank" rel="noopener">discogs.com/settings/developers</a>');
+}
+function renderAll() { applyStaticTexts(); renderRack(); renderRip(); renderDetail(); }
+
+async function api(url, options) {
+  const resp = await fetch(url, options);
+  let data = {};
+  try { data = await resp.json(); } catch (e) { /* keine JSON-Antwort */ }
+  if (!resp.ok) throw new Error(data.error || t("Fehler {n}", { n: resp.status }));
+  return data;
+}
+
+let toastTimer;
+function toast(text, bad = false) {
+  const el = $("#toast");
+  el.textContent = text; el.className = "toast on" + (bad ? " bad" : "");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.className = "toast", bad ? 7000 : 3000);
+}
+
+/* ---------- Regal ---------- */
+async function loadAlbums() {
+  try {
+    state.albums = (await api("/api/albums")).albums;
+    renderRack(); renderRip();
+  } catch (e) { toast(e.message, true); }
+}
+
+/* ---------- Laufender Rip ---------- */
+async function loadRip() {
+  let rip;
+  try { rip = await api("/api/rip"); } catch (e) { return; }
+  const before = state.rip ? state.rip.state : "idle";
+  state.rip = rip;
+  renderRip();
+  // Zustandswechsel (CD eingelegt, Rip fertig oder abgebrochen): Regal sofort auffrischen
+  if ((rip.state || "idle") !== before) loadAlbums();
+  // Ergebnis des automatischen Archivierens einmal melden
+  const auto = rip.auto_archive;
+  if (auto) {
+    if (state.autoId !== undefined && auto.id !== state.autoId) {
+      if (auto.ok) toast(t("„{album}“ wurde automatisch ins Archiv verschoben", { album: auto.album }));
+      else toast(t("„{album}“ konnte nicht automatisch archiviert werden: {why}", { album: auto.album, why: auto.message }), true);
+      await loadAlbums();
+      if (state.form && !state.dirty && !state.albums.some(a => a.path === state.form.path)) closeAlbum();
+    }
+    state.autoId = auto.id;
+  }
+}
+
+function renderRip() {
+  const rip = state.rip || {}, box = $("#rip"), active = rip.state === "ripping" || rip.state === "converting";
+  box.hidden = !active;
+  if (!active) return;
+  // Interpret und Album: zuerst vom Ripper ("Interpret / Album"), sonst aus dem Regal
+  const album = state.albums.find(a => a.busy);
+  let name = "";
+  if (rip.title && !/^unknown artist/i.test(rip.title)) name = rip.title.replace(" / ", " - ");
+  else if (album && !album.unknown) name = `${album.artist} - ${album.album}`;
+  else if (rip.title || (album && album.unknown)) name = t("Unbekannte CD");
+  $("#rip-name").textContent = name || t("Audio-CD");
+  $("#rip-title").textContent = rip.cancelling ? t("Rip wird abgebrochen") : rip.state === "converting" ? t("Wird in MP3 umgewandelt") : t("CD wird ausgelesen");
+  $("#rip-count").textContent = rip.track_total ? t("Titel {a} von {b}", { a: rip.track, b: rip.track_total }) : "";
+  const bar = $("#rip-bar"), known = !!rip.track_total;
+  bar.classList.toggle("unknown", !known);
+  bar.firstElementChild.style.width = known ? `${rip.percent}%` : "";
+  if (known) bar.setAttribute("aria-valuenow", rip.percent); else bar.removeAttribute("aria-valuenow");
+  $("#rip-what").textContent = known ? `${rip.percent} %` : "";
+  const button = $("#rip-cancel");
+  button.hidden = rip.state !== "ripping" || !rip.cancel;
+  button.disabled = !!rip.cancelling;
+}
+
+async function cancelRip() {
+  if (!confirm(t("Den laufenden Rip abbrechen? Die bereits ausgelesenen Titel dieser CD werden verworfen und die CD wird ausgeworfen."))) return;
+  try {
+    await api("/api/rip/cancel", { method: "POST" });
+    state.rip.cancelling = true; renderRip();
+    toast(t("Rip wird abgebrochen, die CD wird gleich ausgeworfen"));
+  } catch (e) { toast(e.message, true); }
+}
+
+// Eine Zeile im Regal. sub = Album steht eingerückt unter der Überschrift seines Interpreten.
+function spineHtml(a, sub) {
+  const tags = (a.busy ? `<span class="tag busy">${esc(t("wird gerippt"))}</span> ` : "") +
+    (a.incomplete ? `<span class="tag warn">${esc(t("unvollständig"))}</span> ` : "");
+  let text;
+  if (a.unknown) text = `<b>${esc(t("Unbeschriftete CD"))}</b><span>${tags}<span class="tag flag">${esc(t("nicht erkannt"))}</span> ${esc(a.disc_id ? t("Disc-ID {id}", { id: a.disc_id }) : "")}</span>`;
+  else if (sub) text = `<b>${esc(a.album || t("Ohne Albumtitel"))}</b>${tags ? `<span>${tags}</span>` : ""}`;
+  else text = `<b>${esc(a.artist || t("Ohne Interpret"))}</b><span>${tags}${esc(a.album || t("Ohne Albumtitel"))}</span>`;
+  const canDrag = !a.multi && !a.busy, canDrop = !a.unknown && !a.busy;
+  const count = a.busy && a.track_total ? t("{a} von {b} Titel", { a: a.tracks, b: a.track_total }) : tracksText(a.tracks);
+  return `<li><div role="button" tabindex="0" class="spine${a.unknown ? " unknown" : ""}${sub ? " sub" : ""}" data-path="${esc(a.path)}" aria-current="${a.path === state.path}"
+    draggable="${canDrag}" data-drop="${canDrop}" ${canDrag ? `title="${esc(t("Zum Hinzufügen auf ein Album ziehen"))}"` : ""}>
+    <span class="spine-text">${text}</span>
+    <span class="spine-meta">${esc(a.year)}<br>${a.discs ? esc(t("{n} CDs, ", { n: a.discs })) : ""}${esc(count)}, ${esc(a.format)}</span></div></li>`;
+}
+
+function renderRack() {
+  renderArchiveAll();
+  if (state.dragPath) return;  // während des Ziehens die Liste nicht neu aufbauen
+  const unknown = state.albums.filter(a => a.unknown).length;
+  $("#chip-unknown").textContent = t("Nicht erkannt ({n})", { n: unknown });
+  $("#chip-all").textContent = t("Alle ({n})", { n: state.albums.length });
+  $("#chip-all").setAttribute("aria-pressed", !state.onlyUnknown);
+  $("#chip-unknown").setAttribute("aria-pressed", state.onlyUnknown);
+  const q = state.filter.toLowerCase();
+  const list = state.albums.filter(a => (!state.onlyUnknown || a.unknown) &&
+    (!q || `${a.artist} ${a.album} ${a.path}`.toLowerCase().includes(q)));
+  const el = $("#spines");
+  if (!list.length) {
+    el.innerHTML = `<li class="empty">${esc(state.albums.length
+      ? (state.onlyUnknown && !q ? t("Alle CDs im Regal sind erkannt.") : t("Nichts gefunden."))
+      : t("Das Regal ist noch leer. Leg eine Audio-CD ein, dann erscheint sie hier."))}</li>`;
+    return;
+  }
+  // Aufeinanderfolgende Alben desselben Interpreten zusammenfassen (die Liste ist nach Interpret sortiert)
+  const groups = [];
+  list.forEach(a => {
+    const key = a.unknown ? null : (a.artist || "").toLowerCase();
+    const last = groups[groups.length - 1];
+    if (key && last && last.key === key) last.items.push(a); else groups.push({ key, items: [a] });
+  });
+  el.innerHTML = groups.map(g => {
+    if (g.items.length === 1) return spineHtml(g.items[0], false);
+    // mehrere Alben: Überschrift mit dem Interpreten, darunter die Alben nach Jahr
+    g.items.sort((a, b) => (a.year || "9999").localeCompare(b.year || "9999") || a.album.localeCompare(b.album));
+    return `<li class="artist-head">${esc(g.items[0].artist)}<span>${esc(t("{n} Alben", { n: g.items.length }))}</span></li>`
+      + g.items.map(a => spineHtml(a, true)).join("");
+  }).join("");
+}
+
+/* ---------- Probehören ---------- */
+const ICON_PLAY = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2.5 1v10l8.5-5z"/></svg>';
+const ICON_PAUSE = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M2 1h3v10H2zM7 1h3v10H7z"/></svg>';
+const ICON_FILL_DOWN = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.5v7M4.8 5.6 8 8.8l3.2-3.2M3 11.5h10M3 14.5h10"/></svg>';
+const player = new Audio();
+player.preload = "none";
+const playLabel = (on, n) => t("{action}: Titel {n}", { action: on ? t("Anhalten") : t("Abspielen"), n });
+
+function refreshPlayButtons() {
+  if (!state.form) return;
+  document.querySelectorAll(".playbtn").forEach(b => {
+    const on = state.form.tracks[+b.dataset.play].file === state.playing;
+    b.setAttribute("aria-pressed", on);
+    b.setAttribute("aria-label", playLabel(on, +b.dataset.play + 1));
+    b.innerHTML = on ? ICON_PAUSE : ICON_PLAY;
+  });
+}
+function stopPlayback() {
+  player.pause(); player.removeAttribute("src"); player.load();
+  state.playing = null; refreshPlayButtons();
+}
+function togglePlay(index) {
+  const track = state.form.tracks[index];
+  if (state.playing === track.file) return stopPlayback();
+  player.src = `/api/audio?path=${encodeURIComponent(state.form.path)}&file=${encodeURIComponent(track.file)}`;
+  state.playing = track.file; refreshPlayButtons();
+  player.play().catch(() => { /* Fehler meldet das error-Ereignis */ });
+}
+player.addEventListener("ended", () => { state.playing = null; refreshPlayButtons(); });
+player.addEventListener("error", () => {
+  if (!state.playing) return;
+  state.playing = null; refreshPlayButtons();
+  toast(t("Dieser Titel lässt sich im Browser nicht abspielen."), true);
+});
+
+/* ---------- Detail ---------- */
+async function openAlbum(path) {
+  if (state.dirty && path !== state.path && !confirm(t("Ungespeicherte Änderungen verwerfen?"))) return;
+  stopPlayback();
+  try {
+    const album = await api("/api/album?path=" + encodeURIComponent(path));
+    state.path = album.path; state.form = album; state.dirty = false;
+    state.results = null; state.release = null; state.searchError = ""; state.coverUrl = ""; state.coverData = "";
+    state.query = album.unknown ? "" : `${album.artist} ${album.album}`.trim();
+    $("#app").classList.add("show-detail");
+    renderRack(); renderDetail();
+    $("#detail").scrollTop = 0;
+  } catch (e) { toast(e.message, true); }
+}
+
+function closeAlbum() {
+  stopPlayback();
+  state.form = null; state.path = null; state.dirty = false; state.release = null;
+  $("#app").classList.remove("show-detail");
+  renderDetail(); renderRack();
+}
+
+function renderDetail() {
+  const f = state.form, el = $("#detail");
+  if (!f) {
+    el.innerHTML = `<div class="detail-inner"><p class="empty">${esc(t("Wähl links eine CD aus, um ihre Tags zu bearbeiten."))}</p></div>`;
+    renderSavebar(); return;
+  }
+  const dis = f.busy ? "disabled" : "";
+  const rel = state.release, disc = rel && !f.multi ? rel.discs[state.disc] : null;
+  const cover = state.coverData
+    ? `<img src="${state.coverData}" alt="${esc(t("Neues Cover, noch nicht gespeichert"))}">`
+    : state.coverUrl
+    ? `<img src="${esc(state.coverUrl)}" alt="${esc(t("Cover von Discogs"))}">`
+    : `<img src="/api/cover?path=${encodeURIComponent(f.path)}&t=${Date.now()}" alt="" data-fallback="${esc(t("Kein Cover"))}" onerror="this.replaceWith(document.createTextNode(this.dataset.fallback))">`;
+
+  let notice = "";
+  if (f.busy) notice = `<p class="notice info">${esc(f.multi
+    ? t("Eine CD dieses Albums wird gerade gerippt. Bearbeiten kannst du das Album, sobald der Rip fertig ist.")
+    : t("Diese CD wird gerade gerippt. Bearbeiten kannst du sie, sobald der Rip fertig ist."))}</p>`;
+  else if (f.unknown && !rel) notice = `<p class="notice">${esc(t("MusicBrainz kennt diese CD nicht. Such sie unten bei Discogs und übernimm die Daten."))}</p>`;
+  else if (f.incomplete) notice = `<p class="notice bad">${esc(f.track_total
+    ? t("Der Rip ist unvollständig: {a} von {b} Titeln vorhanden.", { a: f.tracks.length, b: f.track_total })
+    : t("Mindestens eine CD dieses Albums ist unvollständig gerippt."))}</p>`;
+
+  let match = "";
+  if (rel && f.multi) {
+    const off = discNumbers(f).map(n => [n, f.tracks.filter(x => x.disc === n).length, (rel.discs[n - 1] || { tracks: [] }).tracks.length])
+      .filter(x => x[1] !== x[2]);
+    match = off.length
+      ? `<p class="notice bad">${esc(t("Die Titelzahlen passen nicht zu dieser Ausgabe: {list}. Wahrscheinlich ist das eine andere Ausgabe.",
+          { list: off.map(x => t("CD{n} hat {a} Titel, Discogs führt {b}", { n: x[0], a: x[1], b: x[2] })).join("; ") }))}</p>`
+      : `<p class="notice info">${esc(t("Daten von Discogs für alle {n} CDs eingetragen, aber noch nicht gespeichert. Prüf die Titel und speichere dann.", { n: f.discs }))}</p>`;
+  } else if (rel && disc) {
+    match = disc.tracks.length === f.tracks.length
+      ? `<p class="notice info">${esc(t("Daten von Discogs eingetragen, aber noch nicht gespeichert. Prüf die Titel und speichere dann."))}</p>`
+      : `<p class="notice bad">${esc(t("Die Titelzahl passt nicht: Discogs führt {a} Titel, gerippt wurden {b}. Wahrscheinlich ist das eine andere Ausgabe.", { a: disc.tracks.length, b: f.tracks.length }))}</p>`;
+    if (rel.discs.length > 1) match += `<div class="field narrow" style="margin-top:10px"><label for="disc">${esc(t("Welche CD dieser Ausgabe?"))}</label>
+      <select id="disc">${rel.discs.map((d, i) => `<option value="${i}" ${i === state.disc ? "selected" : ""}>${esc(d.name)} (${esc(tracksText(d.tracks.length))})</option>`).join("")}</select></div>`;
+  }
+
+  const rows = f.tracks.map((tr, i) => {
+    const d = discogsTrack(i), ds = d ? toSec(d.duration) : null;
+    const off = ds !== null && Math.abs(ds - tr.length) > 5;
+    const on = state.playing === tr.file;
+    const head = f.multi && (i === 0 || f.tracks[i - 1].disc !== tr.disc)
+      ? `<tr class="disc-head"><th colspan="5" scope="rowgroup">CD${tr.disc}</th></tr>` : "";
+    return `${head}<tr>
+      <td class="play"><button type="button" class="playbtn" data-play="${i}" aria-pressed="${on}" aria-label="${esc(playLabel(on, i + 1))}">${on ? ICON_PAUSE : ICON_PLAY}</button></td>
+      <td class="num"><input type="number" min="1" max="99" value="${esc(tr.number)}" data-t="${i}" data-k="number" aria-label="${esc(t("Nummer"))}" ${dis}></td>
+      <td><input type="text" value="${esc(tr.title)}" data-t="${i}" data-k="title" aria-label="${esc(t("Titel {n}", { n: i + 1 }))}" ${dis}></td>
+      <td><input type="text" value="${esc(tr.artist)}" data-t="${i}" data-k="artist" aria-label="${esc(t("Interpret Titel {n}", { n: i + 1 }))}" ${dis}></td>
+      <td class="len">${fmt(tr.length)}${ds !== null ? ` <span class="${off ? "off" : ""}" title="${esc(t("Länge laut Discogs"))}">/ ${esc(d.duration)}</span>` : ""}</td></tr>`;
+  }).join("");
+
+  el.innerHTML = `<div class="detail-inner">
+    <button class="btn back" id="back">${esc(t("Zurück zum Regal"))}</button>
+    <div class="album-actions">
+      <a class="btn" id="zip" href="/api/zip?path=${encodeURIComponent(f.path)}" download ${f.busy || state.archiving ? 'aria-disabled="true" tabindex="-1"' : ""}>${esc(t("Als ZIP herunterladen"))}</a>
+      <button type="button" class="btn" id="archive" ${f.busy || state.archiving ? "disabled" : ""}>${esc(state.archiving ? (state.archiveVerify ? t("Wird kopiert und geprüft") : t("Wird kopiert")) : t("In Archiv verschieben"))}</button>
+    </div>
+    <div class="album-head">
+      <div class="cover-col">
+        <div class="cover">${cover}</div>
+        <button type="button" class="btn" id="cover-search" ${dis}>${esc(t("Cover suchen"))}</button>
+        <label class="btn${f.busy ? " off" : ""}">${esc(t("Bild hochladen"))}<input type="file" id="cover-file" accept="image/jpeg,image/png,image/webp" ${dis}></label>
+        ${f.busy ? "" : `<p class="hint" style="margin:0">${esc(t("Oder ein Bild oder seine Adresse kopieren und hier mit Strg+V einfügen."))}</p>`}
+      </div>
+      <div class="fields">
+        <div class="field"><label for="f-artist">${esc(t("Interpret"))}</label><div class="with-btn"><input type="text" id="f-artist" data-k="artist" value="${esc(f.artist)}" ${dis}>
+          <button type="button" class="iconbtn" id="artist-to-tracks" title="${esc(t("Interpret für alle Titel übernehmen"))}" aria-label="${esc(t("Interpret für alle Titel übernehmen"))}" ${dis}>${ICON_FILL_DOWN}</button></div></div>
+        <div class="field"><label for="f-album">${esc(t("Album"))}</label><input type="text" id="f-album" data-k="album" value="${esc(f.album)}" ${dis}></div>
+        <div class="field tiny"><label for="f-year">${esc(t("Jahr"))}</label><input type="text" id="f-year" data-k="year" value="${esc(f.year)}" inputmode="numeric" ${dis}></div>
+        <div class="field narrow"><label for="f-genre">${esc(t("Genre"))}</label><input type="text" id="f-genre" data-k="genre" value="${esc(f.genre)}" ${dis}></div>
+        ${f.multi ? `<div class="field narrow"><span class="l">${esc(t("Umfang"))}</span><p class="plain">${esc(t("{n} CDs", { n: f.discs }))}</p></div><div class="field tiny"></div>`
+          : `<div class="field tiny"><label for="f-dn">${esc(t("CD"))}</label><input type="text" id="f-dn" data-k="discnumber" value="${esc(f.discnumber)}" inputmode="numeric" ${dis}></div>
+        <div class="field tiny"><label for="f-dt">${esc(t("von"))}</label><input type="text" id="f-dt" data-k="disctotal" value="${esc(f.disctotal)}" inputmode="numeric" ${dis}></div>
+        <div class="field tiny"></div>`}
+        <div class="field"><label for="f-label">${esc(t("Label"))}</label><input type="text" id="f-label" data-k="label" value="${esc(f.label)}" ${dis}></div>
+        <div class="field"><label for="f-catno">${esc(t("Katalognummer"))}</label><input type="text" id="f-catno" data-k="catno" value="${esc(f.catno)}" ${dis}></div>
+        ${f.multi ? "" : `<p class="hint field wide">${esc(t("Gehört die CD zu einem Album mit mehreren CDs? Trag bei „CD“ ihre Nummer und bei „von“ die Gesamtzahl ein, dann wird sie beim Speichern in das Album einsortiert."))}</p>`}
+      </div>
+    </div>
+    ${notice}${match}
+    <h2>${esc(t("Titel"))}</h2>
+    <table class="tracks"><thead><tr><th><span class="sr">${esc(t("Abspielen"))}</span></th><th>${esc(t("Nr."))}</th><th>${state.lang === "en" ? "Title" : "Titel"}</th><th>${esc(t("Interpret"))}</th><th>${esc(t("Länge"))}</th></tr></thead><tbody>${rows}</tbody></table>
+    ${f.busy ? "" : `<h2>${esc(t("Bei Discogs suchen"))}</h2><div id="discogs">${discogsHtml()}</div>`}
+  </div>`;
+  renderSavebar();
+}
+
+function discogsHtml() {
+  if (!state.tokenSet) return `<p>${esc(t("Für die Suche fehlt noch dein Discogs-Token."))} <button class="linkish" id="need-token">${esc(t("Token eintragen"))}</button></p>`;
+  let out = `<form class="search-row" id="search-form">
+    <input type="search" id="q" name="discogs-suche" value="${esc(state.query)}" placeholder="${esc(t("Interpret und Album, Katalognummer oder Barcode"))}" aria-label="${esc(t("Discogs-Suche"))}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+    <label><input type="checkbox" id="only-cd" ${state.onlyCd ? "checked" : ""}> ${esc(t("nur CDs"))}</label>
+    <button class="btn primary" ${state.searching ? "disabled" : ""}>${esc(state.searching ? t("Suche läuft") : t("Suchen"))}</button></form>`;
+  if (state.searchError) out += `<p class="notice bad">${esc(state.searchError)}</p>`;
+  else if (state.results) {
+    out += state.results.length
+      ? `<ul class="results">${state.results.map(r => `<li><button class="result" data-id="${r.id}" aria-current="${!!state.release && state.release.id === r.id}">
+          ${r.thumb ? `<img src="${esc(r.thumb)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="noimg"></span>`}
+          <span><b>${esc(r.title)}</b><small>${esc([r.year, r.country, [r.label, r.catno].filter(Boolean).join(" "), r.format].filter(Boolean).join(", "))}</small></span></button></li>`).join("")}</ul>`
+      : `<p class="empty">${esc(t("Discogs findet dazu nichts. Probier weniger Wörter oder die Katalognummer von der CD-Hülle."))}</p>`;
+  }
+  return out;
+}
+
+function renderSavebar() {
+  $("#savebar").classList.toggle("on", !!state.form && state.dirty);
+  $("#save").disabled = state.saving;
+  $("#save").textContent = state.saving ? t("Speichert") : t("Tags speichern");
+  $("#savebar-text").textContent = state.release ? t("Discogs-Daten noch nicht gespeichert") : t("Ungespeicherte Änderungen");
+}
+
+function markDirty() { if (!state.dirty) { state.dirty = true; renderSavebar(); } }
+
+/* ---------- Discogs ---------- */
+async function search() {
+  state.query = $("#q").value.trim(); state.onlyCd = $("#only-cd").checked;
+  if (!state.query) return;
+  state.searching = true; state.searchError = ""; renderDiscogs();
+  try {
+    state.results = (await api(`/api/discogs/search?q=${encodeURIComponent(state.query)}&cd=${state.onlyCd ? 1 : 0}`)).results;
+  } catch (e) { state.searchError = e.message; state.results = null; }
+  state.searching = false; renderDiscogs();
+}
+function renderDiscogs() { const el = $("#discogs"); if (el) el.innerHTML = discogsHtml(); }
+
+// Die CD-Nummern eines Albums mit mehreren CDs, in Reihenfolge
+function discNumbers(f) { return [...new Set(f.tracks.map(x => x.disc))]; }
+
+// Der Discogs-Titel, der zum i-ten Titel im Editor gehört (oder null)
+function discogsTrack(i) {
+  const rel = state.release, f = state.form;
+  if (!rel) return null;
+  if (!f.multi) return (rel.discs[state.disc] || { tracks: [] }).tracks[i] || null;
+  const tr = f.tracks[i], d = rel.discs[tr.disc - 1];
+  if (!d) return null;
+  return d.tracks[f.tracks.slice(0, i).filter(x => x.disc === tr.disc).length] || null;
+}
+
+async function pickRelease(id) {
+  try {
+    const rel = await api("/api/discogs/release/" + id);
+    if (!rel.discs.length) return toast(t("Diese Discogs-Ausgabe hat keine Titelliste."), true);
+    state.release = rel;
+    const hit = state.form.multi ? 0 : rel.discs.findIndex(d => d.tracks.length === state.form.tracks.length);
+    state.disc = hit >= 0 ? hit : 0;
+    applyRelease();
+    $("#detail").scrollTop = 0;
+  } catch (e) { toast(e.message, true); }
+}
+
+function applyRelease() {
+  const rel = state.release, f = state.form, disc = rel.discs[state.disc];
+  Object.assign(f, { artist: rel.artist, album: rel.album, year: rel.year, genre: rel.genre,
+    label: rel.label, catno: rel.catno, discogs_id: String(rel.id) });
+  if (f.multi) f.disctotal = Math.max(rel.discs.length, f.discs);
+  else {
+    f.discnumber = rel.discs.length > 1 ? disc.number : "";
+    f.disctotal = rel.discs.length > 1 ? rel.discs.length : "";
+  }
+  state.coverUrl = rel.cover || "";
+  if (rel.cover) state.coverData = "";  // Discogs-Cover ersetzt ein zuvor gewähltes eigenes Bild
+  const position = {};
+  f.tracks.forEach((tr, i) => {
+    const d = discogsTrack(i);
+    position[tr.disc] = (position[tr.disc] || 0) + 1;
+    tr.number = position[tr.disc];  // je CD wieder bei 1 beginnen
+    if (d) { tr.title = d.title; tr.artist = d.artist; }
+  });
+  state.dirty = true;
+  renderDetail();
+}
+
+/* ---------- CD per Ziehen zu einem Album hinzufügen ---------- */
+async function askAttach(source, target) {
+  if (state.dirty && !confirm(t("Ungespeicherte Änderungen verwerfen?"))) return;
+  let plan;
+  try { plan = await api(`/api/attach?source=${encodeURIComponent(source)}&target=${encodeURIComponent(target)}`); }
+  catch (e) { return toast(e.message, true); }
+  state.attach = plan;
+  const what = plan.source.unknown ? t("Die unbeschriftete CD") : `„${plan.source.album}“`;
+  $("#attach-text").textContent = t("{what} ({n} Titel) wird Teil von „{album}“ von {artist}.",
+      { what, n: plan.source.tracks, album: plan.target.album, artist: plan.target.artist })
+    + (plan.target.multi ? "" : t(" Die bisherige CD dieses Albums wird dabei zu CD{n}.", { n: plan.taken[0] }));
+  const max = Math.max(plan.total, plan.suggestion, Math.max(...plan.taken) + 1);
+  $("#attach-number").innerHTML = Array.from({ length: max }, (_, i) => i + 1).map(n => {
+    const taken = plan.taken.includes(n);
+    return `<option value="${n}" ${taken ? "disabled" : ""} ${n === plan.suggestion ? "selected" : ""}>CD${n}${taken ? esc(t(" (schon vorhanden)")) : ""}</option>`;
+  }).join("");
+  $("#attach-reason").textContent = t("Vorschlag: {reason}", { reason: plan.reason });
+  $("#attach-error").textContent = "";
+  $("#attach-discogs").checked = true;
+  updateAttachDiscogs();
+  $("#attach").showModal();
+}
+function updateAttachDiscogs() {
+  $("#attach-discogs-row").hidden = !state.attach.discogs_discs.includes(+$("#attach-number").value);
+}
+async function confirmAttach() {
+  const plan = state.attach, number = +$("#attach-number").value, button = $("#attach-ok");
+  button.disabled = true; button.textContent = t("Fügt hinzu");
+  try {
+    const res = await api("/api/attach", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ source: plan.source.path, target: plan.target.path, number,
+        use_discogs: !$("#attach-discogs-row").hidden && $("#attach-discogs").checked }) });
+    $("#attach").close();
+    state.dirty = false;
+    await loadAlbums();
+    await openAlbum(res.path);
+    toast(t("Als CD{n} hinzugefügt", { n: number }));
+  } catch (e) { $("#attach-error").textContent = e.message; }
+  button.disabled = false; button.textContent = t("Hinzufügen");
+}
+
+/* ---------- Interpret für alle Titel ---------- */
+function artistToTracks() {
+  const f = state.form, artist = (f.artist || "").trim();
+  if (!artist) return toast(t("Trag zuerst oben einen Interpreten ein."), true);
+  f.tracks.forEach(tr => { tr.artist = artist; });
+  document.querySelectorAll('#detail input[data-t][data-k="artist"]').forEach(el => { el.value = artist; });
+  markDirty();
+  toast(t("Interpret für alle {n} Titel übernommen", { n: f.tracks.length }));
+}
+
+/* ---------- Album ins Archiv verschieben ---------- */
+async function archiveAlbum() {
+  const f = state.form;
+  if (state.dirty) return toast(t("Bitte zuerst die ungespeicherten Änderungen speichern."), true);
+  if (!state.archive.available) return toast(t("Der Archivordner ist noch nicht eingebunden. Führe einmal update.bat im cdripper-Ordner aus."), true);
+  const root = state.archive.kind === "smb" ? state.archive.path : (state.archive.active || t("Ordner „archiv“ im cdripper-Ordner"));
+  const dest = `${root}\\${f.path.replace(/\//g, "\\")}`;
+  if (!confirm(t(state.archiveVerify
+      ? "„{album}“ ins Archiv verschieben?\n\nDas Album wird kopiert, jede Datei per Prüfsumme geprüft und erst danach hier im Regal gelöscht.\n\nZiel: {dest}"
+      : "„{album}“ ins Archiv verschieben?\n\nDas Album wird kopiert und danach hier im Regal gelöscht. Die Prüfung per Prüfsumme ist abgeschaltet.\n\nZiel: {dest}",
+      { album: f.album || f.path, dest }))) return;
+  stopPlayback();
+  state.archiving = true; renderDetail();
+  try {
+    const res = await api("/api/archive?path=" + encodeURIComponent(f.path), { method: "POST" });
+    state.archiving = false;
+    closeAlbum();
+    await loadAlbums();
+    toast(t(res.verified ? "Ins Archiv verschoben und geprüft ({n} Dateien, {mb} MB)" : "Ins Archiv verschoben, ohne Prüfung ({n} Dateien, {mb} MB)",
+      { n: res.files, mb: Math.round(res.bytes / 1048576) }));
+  } catch (e) {
+    state.archiving = false; renderDetail();
+    toast(e.message, true);
+    loadAlbums();
+  }
+}
+
+// Alle erkannten Alben nacheinander verschieben. Nicht erkannte CDs bleiben im Regal.
+const archivable = () => state.albums.filter(a => !a.unknown && !a.busy && !a.incomplete);
+function renderArchiveAll() {
+  const button = $("#archive-all"), job = state.archiveAll;
+  button.disabled = !!job || state.archiving || !archivable().length;
+  button.textContent = job ? t("Verschiebe {i} von {n}", job) : t("Alle ins Archiv verschieben");
+}
+async function archiveAll() {
+  const list = archivable();
+  if (!list.length || state.archiveAll) return;
+  if (state.dirty) return toast(t("Bitte zuerst die ungespeicherten Änderungen speichern."), true);
+  if (!state.archive.available) return toast(t("Der Archivordner ist noch nicht eingebunden. Führe einmal update.bat im cdripper-Ordner aus."), true);
+  const root = state.archive.kind === "smb" ? state.archive.path : (state.archive.active || t("Ordner „archiv“ im cdripper-Ordner"));
+  const left = state.albums.length - list.length;
+  let question = t("{n} Alben ins Archiv verschieben?", { n: list.length }) + "\n\n"
+    + t(state.archiveVerify ? "Jedes Album wird kopiert, per Prüfsumme geprüft und erst danach hier im Regal gelöscht."
+                            : "Jedes Album wird kopiert und danach hier im Regal gelöscht. Die Prüfung per Prüfsumme ist abgeschaltet.");
+  if (left) question += "\n\n" + t("{n} nicht erkannte oder unvollständige CDs bleiben im Regal.", { n: left });
+  question += "\n\n" + t("Ziel: {dest}", { dest: root });
+  if (!confirm(question)) return;
+  stopPlayback(); closeAlbum();
+  let done = 0; const failed = [];
+  for (let i = 0; i < list.length; i++) {
+    state.archiveAll = { i: i + 1, n: list.length }; renderArchiveAll();
+    try { await api("/api/archive?path=" + encodeURIComponent(list[i].path), { method: "POST" }); done++; }
+    catch (e) { failed.push(`${list[i].artist} - ${list[i].album}: ${e.message}`); }
+  }
+  state.archiveAll = null;
+  await loadAlbums();
+  if (failed.length) toast(t("{done} Alben verschoben, {bad} nicht: {why}", { done, bad: failed.length, why: failed[0] }), true);
+  else toast(t("{n} Alben ins Archiv verschoben", { n: done }));
+}
+
+/* ---------- Eigenes Cover ---------- */
+// Das Bild wird im Browser auf höchstens 1400 px verkleinert und als JPEG übergeben,
+// damit nicht ein riesiges Foto in jede einzelne Datei eingebettet wird.
+function loadCoverFile(file) {
+  if (!file) return;
+  const url = URL.createObjectURL(file), img = new Image();
+  img.onload = () => {
+    const scale = Math.min(1, 1400 / Math.max(img.naturalWidth, img.naturalHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(img.naturalWidth * scale); canvas.height = Math.round(img.naturalHeight * scale);
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, canvas.width, canvas.height);  // transparente PNGs bekommen Weiß
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    URL.revokeObjectURL(url);
+    state.coverData = canvas.toDataURL("image/jpeg", 0.9); state.coverUrl = "";
+    state.dirty = true; renderDetail();
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); toast(t("Diese Datei ist kein lesbares Bild."), true); };
+  img.src = url;
+}
+
+/* ---------- Cover suchen (COV) oder per Adresse holen ---------- */
+const COV_ORIGIN = "https://covers.musichoarders.xyz";
+
+function openCoverSearch() {
+  const f = state.form, url = new URL(COV_ORIGIN + "/");
+  if (!f.unknown) {
+    if (f.artist) url.searchParams.set("artist", f.artist);
+    if (f.album) url.searchParams.set("album", f.album);
+  }
+  url.searchParams.set("country", "de");
+  // Ohne Angabe ist auf der Suchseite keine Quelle ausgewählt; mehr als neun lässt sie pro Suche nicht zu
+  url.searchParams.set("sources", "amazonmusic,applemusic,deezer,discogs,itunes,musicbrainz,qobuz,spotify,tidal");
+  // Die Suchseite meldet das angeklickte Cover an dieses Fenster zurück
+  url.searchParams.set("remote.port", "browser");
+  url.searchParams.set("remote.agent", t("CD-Regal"));
+  url.searchParams.set("remote.text", t("Ins CD-Regal übernehmen"));
+  state.covPath = f.path;
+  state.covWindow = window.open(url.toString(), "cd-regal-coversuche");
+  if (!state.covWindow) toast(t("Der Browser hat das Suchfenster blockiert. Bitte Pop-ups für diese Seite erlauben."), true);
+}
+
+async function useCoverUrl(url) {
+  if (!state.form || state.form.busy) return;
+  toast(t("Lädt das Bild"));
+  try {
+    const res = await api("/api/cover/fetch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ url }) });
+    state.coverData = res.data; state.coverUrl = ""; state.dirty = true;
+    renderDetail();
+    toast(t("Cover übernommen. Es wird mit „Tags speichern“ geschrieben."));
+  } catch (e) { toast(e.message, true); }
+}
+
+window.addEventListener("message", e => {
+  if (e.origin !== COV_ORIGIN) return;
+  let data = e.data;
+  if (typeof data === "string") { try { data = JSON.parse(data); } catch (err) { return; } }
+  const url = data && (data.bigCoverUrl || data.smallCoverUrl);
+  if (typeof url !== "string" || !/^https?:\/\//.test(url)) return;
+  if (!state.form || state.form.path !== state.covPath) return toast(t("Das Cover gehört zu einem anderen Album als dem geöffneten und wurde nicht übernommen."), true);
+  try { if (state.covWindow) state.covWindow.close(); } catch (err) { /* Fenster gehört einer fremden Seite */ }
+  window.focus();
+  useCoverUrl(url);
+});
+
+// Strg+V: kopiertes Bild oder kopierte Bild-Adresse als Cover übernehmen
+document.addEventListener("paste", e => {
+  if (!state.form || state.form.busy || document.querySelector("dialog[open]")) return;
+  const items = [...(e.clipboardData ? e.clipboardData.items : [])];
+  const image = items.find(i => i.kind === "file" && i.type.startsWith("image/"));
+  if (image) { e.preventDefault(); return loadCoverFile(image.getAsFile()); }
+  if (e.target.closest && e.target.closest("input, textarea, select")) return;  // normales Einfügen in ein Feld
+  const text = (e.clipboardData ? e.clipboardData.getData("text") : "").trim();
+  if (/^https?:\/\/\S+$/.test(text)) { e.preventDefault(); useCoverUrl(text); }
+});
+
+/* ---------- Speichern ---------- */
+async function save() {
+  const f = state.form;
+  state.saving = true; renderSavebar();
+  try {
+    const body = { artist: f.artist, album: f.album, year: f.year, genre: f.genre, discnumber: f.discnumber, disctotal: f.disctotal,
+      label: f.label, catno: f.catno, discogs_id: f.discogs_id, cover_url: state.coverUrl || "", cover_data: state.coverData || "",
+      tracks: f.tracks.map(tr => ({ file: tr.file, number: tr.number, title: tr.title, artist: tr.artist })) };
+    const res = await api("/api/album?path=" + encodeURIComponent(f.path), {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+    state.dirty = false; state.saving = false;
+    await loadAlbums();
+    await openAlbum(res.path);
+    toast(t("Tags gespeichert"));
+  } catch (e) { state.saving = false; renderSavebar(); toast(e.message, true); }
+}
+
+/* ---------- Einstellungen ---------- */
+function applySettings(data) {
+  state.lang = data.language === "en" ? "en" : "de";
+  state.tokenSet = data.discogs_token_set; state.format = data.format; state.mp3Available = data.mp3_available;
+  state.yearPrefix = !!data.year_prefix; state.archive = data.archive || {};
+  state.archiveVerify = data.archive_verify !== false; state.archiveAuto = !!data.archive_auto;
+}
+async function loadSettings() {
+  try { applySettings(await api("/api/settings")); } catch (e) { /* Standardwerte bleiben */ }
+}
+const isShare = path => /^(\\\\|\/\/|smb:\/\/)/i.test((path || "").trim());
+function archiveStateText() {
+  const a = state.archive, active = a.active || t("Ordner „archiv“ im cdripper-Ordner");
+  if (a.kind === "smb") return t("Netzwerkfreigabe, wird direkt angesprochen.");
+  if (!a.available) return t("Der Archivordner ist noch nicht eingebunden. Führe einmal update.bat im cdripper-Ordner aus.");
+  return a.pending
+    ? t("Noch nicht aktiv. Führe update.bat im cdripper-Ordner aus, damit der neue Ordner eingebunden wird. Bis dahin gilt: {p}", { p: active })
+    : t("Aktiv: {p}", { p: active });
+}
+// Benutzer und Kennwort nur zeigen, wenn eine Netzwerkfreigabe eingetragen ist
+function updateArchiveFields() {
+  $("#archive-login").hidden = !isShare($("#archive-path").value);
+}
+async function testArchive() {
+  const button = $("#archive-test"), out = $("#archive-state");
+  button.disabled = true; out.classList.remove("bad"); out.textContent = t("Prüft");
+  try {
+    const res = await api("/api/archive/test", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path: $("#archive-path").value, user: $("#archive-user").value, password: $("#archive-password").value }) });
+    out.textContent = res.kind === "smb" ? t("Die Freigabe ist erreichbar und beschreibbar.") : t("Der Archivordner ist beschreibbar.");
+  } catch (e) { out.textContent = e.message; out.classList.add("bad"); }
+  button.disabled = false;
+}
+function openSettings() {
+  $("#token").value = ""; $("#settings-error").textContent = "";
+  $("#token-state").textContent = state.tokenSet ? t("Es ist bereits ein Token gespeichert. Lass das Feld leer, um es zu behalten.") : t("Noch kein Token gespeichert.");
+  $("#year-prefix").checked = !!state.yearPrefix;
+  $("#archive-verify").checked = state.archiveVerify; $("#archive-auto").checked = state.archiveAuto;
+  $("#archive-path").value = state.archive.path || "";
+  $("#archive-user").value = state.archive.user || "";
+  $("#archive-password").value = "";
+  $("#archive-password").placeholder = state.archive.password_set ? t("Es ist ein Kennwort gespeichert. Leer lassen, um es zu behalten.") : "";
+  $("#archive-state").classList.remove("bad"); $("#archive-state").textContent = archiveStateText();
+  updateArchiveFields();
+  document.querySelectorAll('input[name="language"]').forEach(r => { r.checked = r.value === state.lang; });
+  document.querySelectorAll('input[name="format"]').forEach(r => {
+    r.checked = r.value === state.format;
+    r.disabled = r.value !== "flac" && !state.mp3Available;
+  });
+  $("#format-hint").textContent = state.mp3Available
+    ? t("Gilt ab der nächsten CD. FLAC ist verlustfrei, MP3 braucht etwa ein Viertel des Platzes.")
+    : t("Für MP3 muss der Ripper einmal neu gebaut werden (update.bat im cdripper-Ordner).");
+  $("#settings").showModal();
+}
+async function saveSettings() {
+  const button = $("#settings-save"), hasToken = !!$("#token").value.trim();
+  button.disabled = true; button.textContent = hasToken ? t("Prüft Token bei Discogs") : t("Speichert");
+  $("#settings-error").textContent = "";
+  try {
+    const format = (document.querySelector('input[name="format"]:checked') || {}).value || state.format;
+    const language = (document.querySelector('input[name="language"]:checked') || {}).value || state.lang;
+    const yearBefore = !!state.yearPrefix, archiveBefore = state.archive.path || "";
+    const res = await api("/api/settings", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ discogs_token: $("#token").value, format, language, year_prefix: $("#year-prefix").checked,
+        archive_verify: $("#archive-verify").checked, archive_auto: $("#archive-auto").checked,
+        archive_path: $("#archive-path").value, archive_user: $("#archive-user").value, archive_password: $("#archive-password").value }) });
+    applySettings(res);
+    $("#settings").close();
+    if (yearBefore !== state.yearPrefix) {
+      // Die Albumordner werden umbenannt: geöffnetes Album schließen und das Regal neu einlesen
+      closeAlbum();
+      loadAlbums();
+    }
+    renderAll();
+    toast(hasToken
+      ? (res.discogs_user ? t("Einstellungen gespeichert. Das Token ist gültig (Discogs-Konto {user}).", { user: res.discogs_user }) : t("Einstellungen gespeichert. Das Token ist gültig."))
+      : (state.archive.pending && archiveBefore !== (state.archive.path || "")
+        ? t("Einstellungen gespeichert. Der neue Archivordner gilt, sobald du update.bat ausgeführt hast.")
+        : t("Einstellungen gespeichert")));
+  } catch (e) { $("#settings-error").textContent = e.message; }
+  button.disabled = false; button.textContent = t("Einstellungen speichern");
+}
+
+/* ---------- Ereignisse ---------- */
+const rack = $("#spines");
+rack.addEventListener("click", e => { const b = e.target.closest(".spine"); if (b) openAlbum(b.dataset.path); });
+rack.addEventListener("keydown", e => {
+  const b = e.target.closest(".spine");
+  if (b && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openAlbum(b.dataset.path); }
+});
+function endDrag() {
+  state.dragPath = null; rack.classList.remove("dragging-on");
+  rack.querySelectorAll(".dragging, .drop").forEach(el => el.classList.remove("dragging", "drop"));
+}
+const dropTarget = e => {
+  const sp = e.target.closest('.spine[data-drop="true"]');
+  return sp && state.dragPath && sp.dataset.path !== state.dragPath ? sp : null;
+};
+rack.addEventListener("dragstart", e => {
+  const sp = e.target.closest('.spine[draggable="true"]');
+  if (!sp) return;
+  state.dragPath = sp.dataset.path;
+  e.dataTransfer.effectAllowed = "move"; e.dataTransfer.setData("text/plain", sp.dataset.path);
+  sp.classList.add("dragging"); rack.classList.add("dragging-on");
+});
+rack.addEventListener("dragend", () => { endDrag(); renderRack(); });
+rack.addEventListener("dragover", e => {
+  const sp = dropTarget(e);
+  rack.querySelectorAll(".drop").forEach(el => { if (el !== sp) el.classList.remove("drop"); });
+  if (sp) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; sp.classList.add("drop"); }
+});
+rack.addEventListener("drop", e => {
+  const sp = dropTarget(e);
+  if (!sp) return;
+  e.preventDefault();
+  const source = state.dragPath, target = sp.dataset.path;
+  endDrag();
+  askAttach(source, target);
+});
+$("#attach-number").addEventListener("change", updateAttachDiscogs);
+$("#attach-cancel").addEventListener("click", () => $("#attach").close());
+$("#attach-ok").addEventListener("click", confirmAttach);
+$("#rip-cancel").addEventListener("click", cancelRip);
+$("#filter").addEventListener("input", e => { state.filter = e.target.value; renderRack(); });
+$("#chip-all").addEventListener("click", () => { state.onlyUnknown = false; renderRack(); });
+$("#chip-unknown").addEventListener("click", () => { state.onlyUnknown = true; renderRack(); });
+$("#open-settings").addEventListener("click", openSettings);
+$("#settings-cancel").addEventListener("click", () => $("#settings").close());
+$("#settings-save").addEventListener("click", saveSettings);
+$("#archive-test").addEventListener("click", testArchive);
+$("#archive-all").addEventListener("click", archiveAll);
+$("#archive-path").addEventListener("input", updateArchiveFields);
+$("#save").addEventListener("click", save);
+$("#discard").addEventListener("click", () => { state.dirty = false; openAlbum(state.path); });
+
+$("#detail").addEventListener("input", e => {
+  const el = e.target, k = el.dataset.k;
+  if (!k || !state.form) return;
+  if (el.dataset.t !== undefined) state.form.tracks[+el.dataset.t][k] = el.value;
+  else state.form[k] = el.value;
+  markDirty();
+});
+$("#detail").addEventListener("change", e => {
+  if (e.target.id === "disc") { state.disc = +e.target.value; applyRelease(); }
+  if (e.target.id === "cover-file") loadCoverFile(e.target.files[0]);
+});
+$("#detail").addEventListener("submit", e => { if (e.target.id === "search-form") { e.preventDefault(); search(); } });
+$("#detail").addEventListener("click", e => {
+  if (e.target.id === "need-token") return openSettings();
+  const play = e.target.closest(".playbtn"); if (play) return togglePlay(+play.dataset.play);
+  if (e.target.closest("#artist-to-tracks")) return artistToTracks();
+  if (e.target.id === "cover-search") return openCoverSearch();
+  if (e.target.id === "archive") return archiveAlbum();
+  if (e.target.id === "back") { $("#app").classList.remove("show-detail"); return; }
+  const r = e.target.closest(".result"); if (r) pickRelease(+r.dataset.id);
+});
+window.addEventListener("beforeunload", e => { if (state.dirty) e.preventDefault(); });
+
+(async function init() {
+  applyStaticTexts(); renderDetail();
+  await Promise.all([loadSettings(), loadAlbums()]);
+  renderAll();
+  loadRip();
+  setInterval(loadRip, 2000);
+  setInterval(async () => {
+    await loadAlbums();
+    // Offenes Album auffrischen, solange es noch gerippt wird und nichts bearbeitet wurde
+    if (state.form && state.form.busy && !state.dirty) {
+      try { state.form = await api("/api/album?path=" + encodeURIComponent(state.path)); renderDetail(); }
+      catch (e) { state.form = null; state.path = null; renderDetail(); }
+    }
+  }, 8000);
+})();
+</script>
+</body>
+</html>

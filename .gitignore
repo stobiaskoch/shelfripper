@@ -1,0 +1,14 @@
+# Private data - never commit
+# config/ holds the Discogs token and the SMB password in plain text
+config/
+musik/
+musik-mp3/
+archiv/
+start-log.txt
+
+# Clutter
+__pycache__/
+*.pyc
+Thumbs.db
+desktop.ini
+.DS_Store
