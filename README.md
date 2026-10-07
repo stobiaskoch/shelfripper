@@ -1,4 +1,4 @@
-# <img src="web/static/favicon.svg" alt="" width="36" align="top"> Shelfripper
+# <img src="web/static/favicon.svg" alt="" width="36" align="top"> ShelfRipper
 
 **Insert a CD, get a tagged album.** Two small Docker containers for Windows: one rips every audio CD you put in the drive, the other gives you a web page to check, tag and archive the results.
 
