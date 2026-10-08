@@ -1223,7 +1223,9 @@ def api_album():
 @app.post("/api/album")
 def api_album_save():
     directory = album_dir(request.args.get("path"))
-    return jsonify({"path": save_album(directory, request.get_json(force=True) or {})})
+    path = save_album(directory, request.get_json(force=True) or {})
+    remember_discogs(path)
+    return jsonify({"path": path})
 
 
 def album_cover(directory):
@@ -1692,6 +1694,89 @@ def _archive_album(directory):
     return {"files": len(files), "bytes": total, "target": rel.as_posix(), "verified": verify}
 
 
+# ---------------------------------------------------------------- Discogs-Zuordnung merken
+
+DISCOGS_MAP_FILE = CONFIG / "discogs-cds.json"  # Disc-ID -> Discogs-Ausgabe und CD-Nummer
+_map_lock = threading.Lock()
+
+
+def load_discogs_map():
+    try:
+        return json.loads(DISCOGS_MAP_FILE.read_text("utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def remember_discogs(path):
+    """Nach dem Speichern: jede CD des Albums, die mit Discogs getaggt ist, unter ihrer Disc-ID merken."""
+    try:
+        directory = album_dir(path)
+        entries = {}
+        for number, _disc_dir, files in album_discs(directory):
+            if not files:
+                continue
+            tags, _length = read_audio(files[0])
+            disc_id, release = first(tags, "cddb").lower(), first(tags, "discogs_release_id")
+            if disc_id and to_int(release):
+                entries[disc_id] = {
+                    "release": to_int(release),
+                    "disc": number or to_int(first(tags, "discnumber")) or 1,
+                    "artist": first(tags, "albumartist") or first(tags, "artist"),
+                    "album": first(tags, "album"),
+                    "saved": time.strftime("%Y-%m-%d %H:%M:%S"),
+                }
+        if entries:
+            with _map_lock:
+                known = load_discogs_map()
+                known.update(entries)
+                tmp = DISCOGS_MAP_FILE.with_suffix(".tmp")
+                tmp.write_text(json.dumps(known, ensure_ascii=False, indent=1, sort_keys=True), "utf-8")
+                os.replace(tmp, DISCOGS_MAP_FILE)
+    except Exception as err:  # Merken ist eine Zugabe; das Speichern selbst ist schon gelungen
+        app.logger.warning("Discogs-Zuordnung für %s nicht gemerkt: %r", path, err)
+
+
+def auto_discogs(disc_id):
+    """Nach dem Rip: Ist diese CD schon einmal mit Discogs getaggt worden, die Daten von dort direkt uebernehmen."""
+    entry = load_discogs_map().get((disc_id or "").lower())
+    if not entry or not discogs_token():
+        return False
+    album = next((a for a in scan_albums() if a["disc_id"] == disc_id), None)
+    if album is None or album["busy"] or album["incomplete"] or album["multi"]:
+        return False
+    try:
+        release = normalize_release(discogs_get(f"/releases/{entry['release']}"))
+        count = len(release["discs"])
+        disc = next((d for d in release["discs"] if d["number"] == entry.get("disc", 1)), None)
+        detail = album_detail(OUTPUT / album["path"])
+        if disc is None or len(disc["tracks"]) != len(detail["tracks"]):
+            app.logger.warning("Discogs-Ausgabe %s passt nicht mehr zu %s (Titelzahl)", entry["release"], album["path"])
+            return False
+        data = {
+            "artist": release["artist"], "album": release["album"], "year": release["year"], "genre": release["genre"],
+            "label": release["label"], "catno": release["catno"], "discogs_id": str(release["id"]),
+            "discnumber": disc["number"] if count > 1 else "", "disctotal": count if count > 1 else "",
+            "cover_url": release["cover"],
+            "tracks": [{"file": tr["file"], "number": index, "title": info["title"], "artist": info["artist"]}
+                       for index, (tr, info) in enumerate(zip(detail["tracks"], disc["tracks"]), start=1)],
+        }
+        try:
+            path = save_album(OUTPUT / album["path"], data)
+        except ApiError as err:
+            if not data["cover_url"]:
+                raise
+            app.logger.warning("Discogs-Cover nicht übernommen (%s), speichere ohne", err.message)
+            path = save_album(OUTPUT / album["path"], dict(data, cover_url=""))
+        remember_discogs(path)
+        app.logger.warning("Mit gemerkter Discogs-Ausgabe %s getaggt: %s", entry["release"], path)
+        return True
+    except ApiError as err:
+        app.logger.warning("Gemerkte Discogs-Ausgabe für %s nicht übernommen: %s", album["path"], err.message)
+    except Exception as err:
+        app.logger.warning("Gemerkte Discogs-Ausgabe für %s nicht übernommen: %r", album["path"], err)
+    return False
+
+
 # ---------------------------------------------------------------- Cover nach dem Rip von selbst holen
 
 def _plain(text):
@@ -1809,6 +1894,7 @@ def watch_ripper():
                 active_disc = status.get("disc_id") or active_disc
             elif active_disc:
                 disc, active_disc = active_disc, ""
+                auto_discogs(disc)
                 auto_cover(disc)
                 auto_archive(disc)
         except Exception:
@@ -1816,7 +1902,18 @@ def watch_ripper():
         time.sleep(3)
 
 
+def backfill_discogs_map():
+    """Beim Start: schon frueher mit Discogs getaggte Alben im Regal ebenfalls merken."""
+    try:
+        for album in scan_albums():
+            if not album["unknown"]:
+                remember_discogs(album["path"])
+    except Exception as err:
+        app.logger.warning("Discogs-Zuordnungen aus dem Regal nicht übernommen: %r", err)
+
+
 def start_watcher():
+    threading.Thread(target=backfill_discogs_map, name="discogs-backfill", daemon=True).start()
     threading.Thread(target=watch_ripper, name="ripper-watch", daemon=True).start()
 
 
@@ -1937,6 +2034,7 @@ def api_attach_preview():
 def api_attach():
     data = request.get_json(force=True) or {}
     path = attach_disc(data.get("source"), data.get("target"), to_int(data.get("number")), bool(data.get("use_discogs")))
+    remember_discogs(path)
     return jsonify({"path": path})
 
 
