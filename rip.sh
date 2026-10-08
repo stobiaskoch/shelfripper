@@ -9,6 +9,15 @@ MP3_QUALITY="${MP3_QUALITY:-0}"    # lame -V: 0 = beste Qualitaet (ca. 245 kbit/
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"; }
 
+# CD auswerfen. "eject" scheitert, wenn das Laufwerk als eingebundene Geraetedatei im Container steckt
+# (Docker in einem LXC-Container unter Proxmox); dann direkt per SCSI-Befehl: Sperre loesen und auswerfen.
+eject_disc() {
+    eject "$DEVICE" 2>/dev/null && return 0
+    command -v sg_start >/dev/null 2>&1 || return 1
+    sg_prevent --allow "$DEVICE" >/dev/null 2>&1
+    sg_start --eject "$DEVICE" >/dev/null 2>&1
+}
+
 STATE_DIR="$OUTPUT/.cdripper"
 CANCEL_FILE="$STATE_DIR/cancel"     # legt die Weboberflaeche an, um den laufenden Rip abzubrechen
 
@@ -163,7 +172,7 @@ cancel_rip() {
         rmdir "$(dirname "$(dirname "$flac")")" 2>/dev/null    # Interpreten-Ordner, falls jetzt leer
     done < <(rip_files "$marker" "$disc")
     sleep 1
-    eject "$DEVICE" 2>/dev/null || log "Hinweis: Auswerfen nicht moeglich."
+    eject_disc || log "Hinweis: Auswerfen nicht moeglich."
     log "Rip abgebrochen, angefangene Titel verworfen."
 }
 
@@ -262,7 +271,7 @@ while true; do
             last_disc="$disc_id"
 
             if [ "$EJECT" = "true" ]; then
-                eject "$DEVICE" 2>/dev/null || log "Hinweis: Auswerfen nicht moeglich."
+                eject_disc || log "Hinweis: Auswerfen nicht moeglich."
             fi
 
             # MP3 entsteht aus den frisch gerippten FLAC-Dateien; die CD wird dafuer nicht mehr gebraucht

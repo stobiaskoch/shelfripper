@@ -11,6 +11,7 @@ RUN apt-get update \
       lame \
       cd-discid \
       eject \
+      sg3-utils \
       libmusicbrainz-discid-perl \
       libwebservice-musicbrainz-perl \
       ca-certificates \
