@@ -1248,13 +1248,45 @@ def album_cover(directory):
     return None
 
 
+THUMBS = {}  # kleine Cover fuer die Albumliste: (Pfad, Stand) -> JPEG-Bytes
+
+
+def cover_thumb(cover, edge):
+    """Cover auf hoechstens edge Pixel verkleinern (fuer die Albumliste)."""
+    if Image is None:
+        return cover
+    picture = Image.open(io.BytesIO(cover[0]))
+    picture.draft("RGB", (edge, edge))  # JPEG gleich verkleinert dekodieren: schnell auch bei grossen Bildern
+    picture = picture.convert("RGB")
+    picture.thumbnail((edge, edge), Image.LANCZOS)
+    out = io.BytesIO()
+    picture.save(out, "JPEG", quality=82)
+    return out.getvalue(), "image/jpeg"
+
+
 @app.get("/api/cover")
 def api_cover():
-    cover = album_cover(album_dir(request.args.get("path")))
+    directory = album_dir(request.args.get("path"))
+    edge = min(to_int(request.args.get("size")) or 0, 600)
+    key = (rel_id(directory), request.args.get("t", ""), edge)
+    if edge and key in THUMBS:
+        cover = THUMBS[key]
+    else:
+        cover = album_cover(directory)
+        if cover and edge:
+            try:
+                cover = cover_thumb(cover, edge)
+            except Exception:
+                cover = None
+            if len(THUMBS) > 1000:
+                THUMBS.clear()
+            THUMBS[key] = cover
     if not cover:
-        return Response(status=404)
-    response = Response(cover[0], mimetype=cover[1])
-    response.headers["Cache-Control"] = "no-cache"
+        response = Response(status=404)
+    else:
+        response = Response(cover[0], mimetype=cover[1])
+    # mit Stand in der Adresse darf der Browser das Bild behalten; sonst immer neu fragen
+    response.headers["Cache-Control"] = "max-age=86400" if edge and request.args.get("t") else "no-cache"
     return response
 
 

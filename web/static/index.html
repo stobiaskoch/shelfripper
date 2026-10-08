@@ -78,7 +78,14 @@ body { display: flex; flex-direction: column; height: 100vh; }
   background: var(--case); border: 1px solid var(--line); border-radius: 3px; text-align: left;
 }
 .spine::before { content: ""; align-self: stretch; margin: -6px 0; border-radius: 2px 0 0 2px; background: var(--line); }
-.spine { cursor: pointer; user-select: none; }
+.spine { cursor: pointer; user-select: none; position: relative; overflow: hidden; }
+/* Cover als Hintergrund links in der Zeile, nach rechts ausgeblendet */
+.spine-art { position: absolute; left: 10px; top: 0; bottom: 0; width: 62%; pointer-events: none;
+  background: center / cover no-repeat; opacity: .5;
+  -webkit-mask-image: linear-gradient(to right, #000 0%, rgba(0,0,0,.55) 35%, transparent 100%);
+          mask-image: linear-gradient(to right, #000 0%, rgba(0,0,0,.55) 35%, transparent 100%); }
+.spine > .spine-text, .spine > .spine-meta { position: relative; }
+.spine-text > b { text-shadow: 0 0 6px var(--case), 0 0 2px var(--case); }
 /* Knöpfe je Album: erscheinen beim Überfahren, bei Tastaturfokus und am geöffneten Album */
 .spines li { position: relative; }
 .spine-actions { position: absolute; right: 7px; top: 1px; bottom: 4px; display: none; align-items: center; gap: 4px;
@@ -686,6 +693,7 @@ function spineHtml(a, sub) {
   const count = a.busy && a.track_total ? t("{a} von {b} Titel", { a: a.tracks, b: a.track_total }) : tracksText(a.tracks);
   return `<li><div role="button" tabindex="0" class="spine${a.unknown ? " unknown" : ""}${sub ? " sub" : ""}" data-path="${esc(a.path)}" aria-current="${a.path === state.path}"
     draggable="${canDrag}" data-drop="${canDrop}" ${canDrag ? `title="${esc(t("Zum Hinzufügen auf ein Album ziehen"))}"` : ""}>
+    ${a.unknown ? "" : `<span class="spine-art" style="background-image:url('/api/cover?path=${encodeURIComponent(a.path).replace(/'/g, "%27")}&amp;size=240&amp;t=${encodeURIComponent(a.modified || "")}')"></span>`}
     <span class="spine-text">${text}</span>
     <span class="spine-meta">${esc(a.year)}<br>${a.discs ? esc(t("{n} CDs, ", { n: a.discs })) : ""}${esc(count)}, ${esc(a.format)}</span></div>
     <span class="spine-actions">
