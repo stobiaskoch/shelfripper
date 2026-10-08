@@ -4,7 +4,7 @@
 
 [Deutsche Fassung](README.de.md)
 
-![Album view with a rip in progress](docs/album.png)
+![Album view with a rip in progress](docs/screenshot-album.png)
 
 *The albums in the screenshots are made up.*
 
@@ -44,7 +44,7 @@ After a reboot or after re-plugging the drive, run `start.bat` again so the driv
 
 ## Settings
 
-![Settings](docs/settings.png)
+![Settings](docs/screenshot-settings.png)
 
 - **Format:** FLAC or MP3 (LAME V0). Applies from the next CD.
 - **Discogs token:** free, created at [discogs.com/settings/developers](https://www.discogs.com/settings/developers) with "Generate new token". It is checked when you save.

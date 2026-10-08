@@ -4,7 +4,7 @@
 
 [English version](README.md)
 
-![Albumansicht mit laufendem Rip](docs/album.png)
+![Albumansicht mit laufendem Rip](docs/screenshot-album.png)
 
 *Die Alben in den Bildern sind erfunden.*
 
@@ -44,7 +44,7 @@ Nach einem Neustart oder nach dem Umstecken des Laufwerks `start.bat` erneut aus
 
 ## Einstellungen
 
-![Einstellungen](docs/settings.png)
+![Einstellungen](docs/screenshot-settings.png)
 
 - **Format:** FLAC oder MP3 (LAME V0). Gilt ab der nächsten CD.
 - **Discogs-Token:** kostenlos unter [discogs.com/settings/developers](https://www.discogs.com/settings/developers) mit „Generate new token“. Es wird beim Speichern geprüft.
