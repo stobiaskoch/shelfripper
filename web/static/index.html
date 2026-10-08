@@ -68,6 +68,18 @@ button { cursor: pointer; }
 }
 .spine::before { content: ""; align-self: stretch; margin: -6px 0; border-radius: 2px 0 0 2px; background: var(--line); }
 .spine { cursor: pointer; user-select: none; }
+/* Knöpfe je Album: erscheinen beim Überfahren, bei Tastaturfokus und am geöffneten Album */
+.spines li { position: relative; }
+.spine-actions { position: absolute; right: 7px; top: 1px; bottom: 4px; display: none; align-items: center; gap: 4px;
+  padding-left: 14px; background: linear-gradient(to right, transparent, var(--case) 12px); }
+.spines li:hover > .spine-actions, .spines li:focus-within > .spine-actions, .spine[aria-current="true"] + .spine-actions { display: flex; }
+.dragging-on .spine-actions { display: none !important; }
+@media (hover: none) { .spine-actions { display: flex; } .spine-meta { visibility: hidden; } }
+.spine-actions .iconbtn { width: 30px; height: 30px; border: 1px solid var(--line); border-radius: 3px; color: var(--ink); cursor: pointer; }
+.spine-actions .iconbtn:hover { border-color: var(--action); color: var(--action); }
+.spine-actions .iconbtn.danger:hover { border-color: var(--bad); color: var(--bad); }
+.spine-actions .iconbtn[aria-disabled="true"] { opacity: .45; pointer-events: none; }
+.btn.danger { color: var(--bad); }
 .spine[draggable="true"] { cursor: grab; }
 .spine.dragging { opacity: .45; }
 .dragging-on .spine:not([data-drop="true"]):not(.dragging) { opacity: .45; }
@@ -222,6 +234,12 @@ a.btn[aria-disabled="true"] { opacity: .5; pointer-events: none; }
       <div class="rip-line"><span id="rip-title"></span><span id="rip-count"></span></div>
       <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" id="rip-bar"><i></i></div>
       <div class="rip-line"><span id="rip-what"></span><button class="btn small" id="rip-cancel" data-i18n="Rip abbrechen"></button></div>
+    </section>
+    <section class="rip" id="arch" hidden aria-live="polite">
+      <div class="rip-line"><b id="arch-name"></b></div>
+      <div class="rip-line"><span id="arch-title"></span><span id="arch-count"></span></div>
+      <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" id="arch-bar"><i></i></div>
+      <div class="rip-line"><span id="arch-what"></span></div>
     </section>
     <ul class="spines" id="spines"></ul>
     <div class="rack-foot"><button type="button" class="btn" id="archive-all"></button></div>
@@ -415,7 +433,14 @@ const EN = {
   "Zurück zum Regal": "Back to the shelf",
   "In Archiv verschieben": "Move to archive",
   "Als ZIP herunterladen": "Download as ZIP",
+  "Album löschen": "Delete album",
+  "„{album}“ endgültig löschen?\n\nAlle {n} Titel werden von der Festplatte gelöscht. Das lässt sich nicht rückgängig machen.":
+    "Delete “{album}” permanently?\n\nAll {n} tracks are deleted from the disk. This cannot be undone.",
+  "„{album}“ gelöscht": "“{album}” deleted",
   "Wird kopiert": "Copying",
+  "Wird ins Archiv kopiert": "Copying to the archive",
+  "Kopie wird geprüft": "Verifying the copy",
+  "Datei {a} von {b}": "File {a} of {b}",
   "Alle ins Archiv verschieben": "Move all to archive",
   "Verschiebe {i} von {n}": "Moving {i} of {n}",
   "{n} Alben ins Archiv verschieben?": "Move {n} albums to the archive?",
@@ -563,7 +588,7 @@ async function loadRip() {
   try { rip = await api("/api/rip"); } catch (e) { return; }
   const before = state.rip ? state.rip.state : "idle";
   state.rip = rip;
-  renderRip();
+  renderRip(); renderArchiveProgress();
   // Zustandswechsel (CD eingelegt, Rip fertig oder abgebrochen): Regal sofort auffrischen
   if ((rip.state || "idle") !== before) loadAlbums();
   // Ergebnis des automatischen Archivierens einmal melden
@@ -602,6 +627,19 @@ function renderRip() {
   button.disabled = !!rip.cancelling;
 }
 
+// Fortschritt beim Verschieben ins Archiv (von Hand, „alle“ oder automatisch nach dem Rip)
+function renderArchiveProgress() {
+  const a = (state.rip || {}).archive, box = $("#arch");
+  box.hidden = !a;
+  if (!a) return;
+  $("#arch-name").textContent = a.name;
+  $("#arch-title").textContent = a.phase === "verify" ? t("Kopie wird geprüft") : t("Wird ins Archiv kopiert");
+  $("#arch-count").textContent = t("Datei {a} von {b}", { a: a.file, b: a.files });
+  $("#arch-bar").firstElementChild.style.width = `${a.percent}%`;
+  $("#arch-bar").setAttribute("aria-valuenow", a.percent);
+  $("#arch-what").textContent = `${a.percent} %`;
+}
+
 async function cancelRip() {
   if (!confirm(t("Den laufenden Rip abbrechen? Die bereits ausgelesenen Titel dieser CD werden verworfen und die CD wird ausgeworfen."))) return;
   try {
@@ -612,6 +650,9 @@ async function cancelRip() {
 }
 
 // Eine Zeile im Regal. sub = Album steht eingerückt unter der Überschrift seines Interpreten.
+const ICON_DOWNLOAD = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8M4.8 6.8 8 10l3.2-3.2M2.5 11.5v2h11v-2"/></svg>';
+const ICON_ARCHIVE = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h12v3H2zM3 6v7.5h10V6M6.3 9h3.4"/></svg>';
+const ICON_TRASH = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11M6 4.5V2.5h4v2M4 4.5l.7 9h6.6l.7-9M6.7 7v4M9.3 7v4"/></svg>';
 function spineHtml(a, sub) {
   const tags = (a.busy ? `<span class="tag busy">${esc(t("wird gerippt"))}</span> ` : "") +
     (a.incomplete ? `<span class="tag warn">${esc(t("unvollständig"))}</span> ` : "");
@@ -620,11 +661,17 @@ function spineHtml(a, sub) {
   else if (sub) text = `<b>${esc(a.album || t("Ohne Albumtitel"))}</b>${tags ? `<span>${tags}</span>` : ""}`;
   else text = `<b>${esc(a.artist || t("Ohne Interpret"))}</b><span>${tags}${esc(a.album || t("Ohne Albumtitel"))}</span>`;
   const canDrag = !a.multi && !a.busy, canDrop = !a.unknown && !a.busy;
+  const off = a.busy || !!state.archiving || !!state.archiveAll;
   const count = a.busy && a.track_total ? t("{a} von {b} Titel", { a: a.tracks, b: a.track_total }) : tracksText(a.tracks);
   return `<li><div role="button" tabindex="0" class="spine${a.unknown ? " unknown" : ""}${sub ? " sub" : ""}" data-path="${esc(a.path)}" aria-current="${a.path === state.path}"
     draggable="${canDrag}" data-drop="${canDrop}" ${canDrag ? `title="${esc(t("Zum Hinzufügen auf ein Album ziehen"))}"` : ""}>
     <span class="spine-text">${text}</span>
-    <span class="spine-meta">${esc(a.year)}<br>${a.discs ? esc(t("{n} CDs, ", { n: a.discs })) : ""}${esc(count)}, ${esc(a.format)}</span></div></li>`;
+    <span class="spine-meta">${esc(a.year)}<br>${a.discs ? esc(t("{n} CDs, ", { n: a.discs })) : ""}${esc(count)}, ${esc(a.format)}</span></div>
+    <span class="spine-actions">
+      <a class="iconbtn" href="/api/zip?path=${encodeURIComponent(a.path)}" download draggable="false" title="${esc(t("Als ZIP herunterladen"))}" aria-label="${esc(t("Als ZIP herunterladen"))}" ${off ? 'aria-disabled="true" tabindex="-1"' : ""}>${ICON_DOWNLOAD}</a>
+      <button type="button" class="iconbtn" data-act="archive" data-path="${esc(a.path)}" title="${esc(t("In Archiv verschieben"))}" aria-label="${esc(t("In Archiv verschieben"))}" ${off ? "disabled" : ""}>${ICON_ARCHIVE}</button>
+      <button type="button" class="iconbtn danger" data-act="delete" data-path="${esc(a.path)}" title="${esc(t("Album löschen"))}" aria-label="${esc(t("Album löschen"))}" ${off ? "disabled" : ""}>${ICON_TRASH}</button>
+    </span></li>`;
 }
 
 function renderRack() {
@@ -773,10 +820,6 @@ function renderDetail() {
 
   el.innerHTML = `<div class="detail-inner">
     <button class="btn back" id="back">${esc(t("Zurück zum Regal"))}</button>
-    <div class="album-actions">
-      <a class="btn" id="zip" href="/api/zip?path=${encodeURIComponent(f.path)}" download ${f.busy || state.archiving ? 'aria-disabled="true" tabindex="-1"' : ""}>${esc(t("Als ZIP herunterladen"))}</a>
-      <button type="button" class="btn" id="archive" ${f.busy || state.archiving ? "disabled" : ""}>${esc(state.archiving ? (state.archiveVerify ? t("Wird kopiert und geprüft") : t("Wird kopiert")) : t("In Archiv verschieben"))}</button>
-    </div>
     <div class="album-head">
       <div class="cover-col">
         <div class="cover">${cover}</div>
@@ -944,30 +987,50 @@ function artistToTracks() {
 }
 
 /* ---------- Album ins Archiv verschieben ---------- */
-async function archiveAlbum() {
-  const f = state.form;
-  if (state.dirty) return toast(t("Bitte zuerst die ungespeicherten Änderungen speichern."), true);
+const albumLabel = a => a.unknown ? t("Unbeschriftete CD") : (a.album || a.path);
+// path leer = das geöffnete Album; sonst ein Album aus der Navigation
+async function archiveAlbum(path) {
+  const f = path ? state.albums.find(a => a.path === path) : state.form;
+  if (!f || state.archiving || state.archiveAll) return;
+  const isOpen = state.form && state.form.path === f.path;
+  if (isOpen && state.dirty) return toast(t("Bitte zuerst die ungespeicherten Änderungen speichern."), true);
   if (!state.archive.available) return toast(t("Der Archivordner ist noch nicht eingebunden. Führe einmal update.bat im cdripper-Ordner aus."), true);
   const root = state.archive.kind === "smb" ? state.archive.path : (state.archive.active || t("Ordner „archiv“ im cdripper-Ordner"));
   const dest = `${root}\\${f.path.replace(/\//g, "\\")}`;
   if (!confirm(t(state.archiveVerify
       ? "„{album}“ ins Archiv verschieben?\n\nDas Album wird kopiert, jede Datei per Prüfsumme geprüft und erst danach hier im Regal gelöscht.\n\nZiel: {dest}"
       : "„{album}“ ins Archiv verschieben?\n\nDas Album wird kopiert und danach hier im Regal gelöscht. Die Prüfung per Prüfsumme ist abgeschaltet.\n\nZiel: {dest}",
-      { album: f.album || f.path, dest }))) return;
-  stopPlayback();
-  state.archiving = true; renderDetail();
+      { album: albumLabel(f), dest }))) return;
+  if (isOpen) stopPlayback();
+  state.archiving = true; if (isOpen) renderDetail(); renderRack();
   try {
     const res = await api("/api/archive?path=" + encodeURIComponent(f.path), { method: "POST" });
     state.archiving = false;
-    closeAlbum();
+    if (state.form && state.form.path === f.path) closeAlbum();
     await loadAlbums();
     toast(t(res.verified ? "Ins Archiv verschoben und geprüft ({n} Dateien, {mb} MB)" : "Ins Archiv verschoben, ohne Prüfung ({n} Dateien, {mb} MB)",
       { n: res.files, mb: Math.round(res.bytes / 1048576) }));
   } catch (e) {
-    state.archiving = false; renderDetail();
+    state.archiving = false; if (state.form && state.form.path === f.path) renderDetail();
     toast(e.message, true);
     loadAlbums();
   }
+}
+
+async function deleteAlbum(path) {
+  const f = path ? state.albums.find(a => a.path === path) : state.albums.find(a => a.path === state.form.path) || state.form;
+  if (!f || state.archiving || state.archiveAll) return;
+  const name = f.unknown ? t("Unbeschriftete CD") : `${f.artist} - ${f.album}`;
+  const count = Array.isArray(f.tracks) ? f.tracks.length : f.tracks;
+  if (!confirm(t("„{album}“ endgültig löschen?\n\nAlle {n} Titel werden von der Festplatte gelöscht. Das lässt sich nicht rückgängig machen.", { album: name, n: count }))) return;
+  const isOpen = state.form && state.form.path === f.path;
+  if (isOpen) stopPlayback();
+  try {
+    await api("/api/delete?path=" + encodeURIComponent(f.path), { method: "POST" });
+    if (state.form && state.form.path === f.path) { state.dirty = false; closeAlbum(); }
+    await loadAlbums();
+    toast(t("„{album}“ gelöscht", { album: name }));
+  } catch (e) { toast(e.message, true); loadAlbums(); }
 }
 
 // Alle erkannten Alben nacheinander verschieben. Nicht erkannte CDs bleiben im Regal.
@@ -1181,7 +1244,11 @@ async function saveSettings() {
 
 /* ---------- Ereignisse ---------- */
 const rack = $("#spines");
-rack.addEventListener("click", e => { const b = e.target.closest(".spine"); if (b) openAlbum(b.dataset.path); });
+rack.addEventListener("click", e => {
+  const act = e.target.closest("[data-act]");
+  if (act) return act.dataset.act === "delete" ? deleteAlbum(act.dataset.path) : archiveAlbum(act.dataset.path);
+  const b = e.target.closest(".spine"); if (b) openAlbum(b.dataset.path);
+});
 rack.addEventListener("keydown", e => {
   const b = e.target.closest(".spine");
   if (b && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); openAlbum(b.dataset.path); }
@@ -1249,6 +1316,7 @@ $("#detail").addEventListener("click", e => {
   if (e.target.closest("#artist-to-tracks")) return artistToTracks();
   if (e.target.id === "cover-search") return openCoverSearch();
   if (e.target.id === "archive") return archiveAlbum();
+  if (e.target.id === "delete") return deleteAlbum();
   if (e.target.id === "back") { $("#app").classList.remove("show-detail"); return; }
   const r = e.target.closest(".result"); if (r) pickRelease(+r.dataset.id);
 });
@@ -1260,6 +1328,7 @@ window.addEventListener("beforeunload", e => { if (state.dirty) e.preventDefault
   renderAll();
   loadRip();
   setInterval(loadRip, 2000);
+  setInterval(() => { if (state.archiving || state.archiveAll || (state.rip || {}).archive) loadRip(); }, 700);  // beim Archivieren öfter nachsehen
   setInterval(async () => {
     await loadAlbums();
     // Offenes Album auffrischen, solange es noch gerippt wird und nichts bearbeitet wurde

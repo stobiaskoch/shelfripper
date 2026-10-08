@@ -75,6 +75,9 @@ except OSError:
 # {0}, {1} ... stehen fuer eingesetzte Werte.
 MESSAGES = [
     ("Unbekanntes Format.", "Unknown format."),
+    ("Dieses Album wird gerade ins Archiv verschoben.", "This album is being moved to the archive right now."),
+    ("Das Album ließ sich nicht vollständig löschen. Vermutlich hat ein anderes Programm den Ordner oder eine Datei geöffnet.",
+     "The album could not be deleted completely. Another program probably has the folder or a file open."),
     ("Der Ripper kann noch kein MP3. Bitte update.bat im cdripper-Ordner ausführen.",
      "The ripper cannot create MP3 yet. Please run update.bat in the cdripper folder."),
     ("Kein Album angegeben.", "No album given."),
@@ -1195,6 +1198,7 @@ def api_rip():
     status = ripper_status()
     status["cancelling"] = status.get("state") == "ripping" and CANCEL_FILE.exists()
     # Ergebnis des letzten automatischen Archivierens, damit die Oberflaeche es einmal melden kann
+    status["archive"] = dict(ARCHIVE_PROGRESS) or None
     status["auto_archive"] = dict(AUTO_EVENT, message=translate(AUTO_EVENT["message"]))
     return jsonify(status)
 
@@ -1582,7 +1586,18 @@ def discard_copy(store, target):
         app.logger.exception("Aufraeumen im Archiv fehlgeschlagen")
 
 
+ARCHIVE_PROGRESS = {}  # Stand des gerade laufenden Verschiebens, fuer die Anzeige in der Oberflaeche
+
+
 def archive_album(directory):
+    """Album ins Archiv verschieben und dabei den Fortschritt fuer die Oberflaeche fuehren."""
+    try:
+        return _archive_album(directory)
+    finally:
+        ARCHIVE_PROGRESS.clear()
+
+
+def _archive_album(directory):
     """Album samt Interpreten-/Albumordner ins Archiv verschieben.
 
     Erst kopieren, dann jede Kopie per SHA-256 gegen das Original pruefen, und erst wenn alles stimmt,
@@ -1617,7 +1632,15 @@ def archive_album(directory):
         store.makedirs(target)
         with store.open(marker, "wb") as handle:
             handle.write(b"Diese Kopie ist noch nicht vollstaendig geprueft.\n")
-        for source in files:
+        work = sum(p.stat().st_size for p in files) * (2 if verify else 1) or 1  # Bytes: kopieren (+ zuruecklesen)
+        done = 0
+
+        def progress(index, phase):
+            ARCHIVE_PROGRESS.update(path=rel.as_posix(), name=" - ".join(rel.parts), file=index, files=len(files),
+                                    phase=phase, percent=min(100, done * 100 // work))
+
+        for index, source in enumerate(files, 1):
+            progress(index, "copy")
             inner = tuple(source.relative_to(directory).parts)
             store.makedirs(target + inner[:-1])
             digest = hashlib.sha256()
@@ -1626,6 +1649,8 @@ def archive_album(directory):
                     digest.update(chunk)
                     writer.write(chunk)
                     total += len(chunk)
+                    done += len(chunk)
+                    progress(index, "copy")
                 writer.flush()
                 try:
                     os.fsync(writer.fileno())  # wirklich auf den Datentraeger schreiben, bevor zurueckgelesen wird
@@ -1635,9 +1660,12 @@ def archive_album(directory):
                 continue
             # Kopie aus dem Archiv zuruecklesen und mit dem Original vergleichen
             check = hashlib.sha256()
+            progress(index, "verify")
             with store.open(target + inner, "rb") as reader:
                 for chunk in iter(lambda: reader.read(1024 * 1024), b""):
                     check.update(chunk)
+                    done += len(chunk)
+                    progress(index, "verify")
             if check.hexdigest() != digest.hexdigest():
                 raise ApiError(f"Die Prüfsumme von '{'/'.join(inner)}' stimmt nach dem Kopieren "
                                "nicht. Es wurde nichts verschoben, das Album liegt unverändert im Regal.", 500)
@@ -1851,6 +1879,31 @@ def api_zip():
 @app.post("/api/archive")
 def api_archive():
     return jsonify(archive_album(album_dir(request.args.get("path"))))
+
+
+@app.post("/api/delete")
+def api_delete():
+    """Album endgueltig aus dem Regal loeschen (die Oberflaeche fragt vorher nach)."""
+    directory = album_dir(request.args.get("path"))
+    discs = album_discs(directory)
+    if not discs:
+        raise ApiError("In diesem Ordner liegen keine Musikdateien.", 404)
+    if album_summary(directory, discs, ripper_status())["busy"]:
+        raise ApiError("Diese CD wird gerade gerippt. Bitte warten, bis der Rip fertig ist.", 409)
+    if ARCHIVE_PROGRESS.get("path") == rel_id(directory):
+        raise ApiError("Dieses Album wird gerade ins Archiv verschoben.", 409)
+    files = sum(len(fs) for _number, _dir, fs in discs)
+    try:
+        shutil.rmtree(directory)
+        parent = directory.parent
+        if parent != OUTPUT and not any(parent.iterdir()):
+            parent.rmdir()
+    except OSError as err:
+        app.logger.warning("Album %s nicht loeschbar: %r", directory, err)
+        raise ApiError("Das Album ließ sich nicht vollständig löschen. Vermutlich hat ein anderes Programm "
+                       "den Ordner oder eine Datei geöffnet.", 409)
+    app.logger.warning("Album geloescht: %s", rel_id(directory))
+    return jsonify({"files": files})
 
 
 @app.post("/api/archive/test")
