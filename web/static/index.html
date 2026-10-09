@@ -55,6 +55,11 @@ body { display: flex; flex-direction: column; height: 100vh; }
 .rack-head { padding: 18px 16px 12px; }
 .rack-head h1 { margin: 0 0 12px; font: 700 28px/1 var(--spine); font-stretch: 75%; letter-spacing: .01em; }
 .rack-tools { display: flex; gap: 8px; flex-wrap: wrap; }
+.seg { display: flex; margin-bottom: 10px; border: 1px solid var(--line); border-radius: 4px; overflow: hidden; background: var(--case); }
+.seg button { flex: 1; border: 0; background: transparent; padding: 6px 10px; color: var(--soft); font-weight: 600; }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: var(--ink); color: var(--shelf); }
+.archive-note { margin: 0 0 14px; padding: 8px 12px; border-left: 3px solid var(--action); background: var(--case); color: var(--soft); font-size: 14px; }
 .rack-tools input { flex: 1 1 140px; min-width: 0; }
 .chips { display: flex; gap: 6px; margin-top: 10px; }
 .rip { margin: 0 10px 10px; padding: 10px 12px; background: var(--case); border: 1px solid var(--action); border-radius: 3px; }
@@ -248,6 +253,10 @@ a.btn[aria-disabled="true"] { opacity: .5; pointer-events: none; }
 <div class="app" id="app">
   <aside class="rack">
     <div class="rack-head">
+      <div class="seg" role="group" data-i18n-label="Ansicht">
+        <button type="button" id="src-shelf" data-src="shelf" aria-pressed="true" data-i18n="Regal"></button>
+        <button type="button" id="src-archive" data-src="archive" aria-pressed="false" data-i18n="Archiv"></button>
+      </div>
       <div class="rack-tools">
         <input type="search" id="filter" name="regal-filter" data-i18n-ph="Im Regal suchen" data-i18n-label="Im Regal suchen" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
       </div>
@@ -358,7 +367,7 @@ const fmt = sec => `${Math.floor(sec / 60)}:${String(sec % 60).padStart(2, "0")}
 const toSec = t => { const m = /^(\d+):(\d{1,2})(?::(\d{2}))?$/.exec((t || "").trim()); return !m ? null : m[3] ? +m[1] * 3600 + +m[2] * 60 + +m[3] : +m[1] * 60 + +m[2]; };
 
 const state = {
-  lang: "de", albums: [], onlyUnknown: false, filter: "",
+  lang: "de", albums: [], onlyUnknown: false, filter: "", source: "shelf", scan: null,
   path: null, form: null, dirty: false, saving: false, archiving: false,
   playing: null, tokenSet: false, format: "flac", mp3Available: false, yearPrefix: false, archive: {},
   results: null, searching: false, release: null, disc: 0, query: "", onlyCd: true, searchError: "",
@@ -461,6 +470,24 @@ const EN = {
   "In Archiv verschieben": "Move to archive",
   "Als ZIP herunterladen": "Download as ZIP",
   "Album löschen": "Delete album",
+  "Regal": "Shelf",
+  "Archiv": "Archive",
+  "Ansicht": "View",
+  "Im Archiv suchen": "Search the archive",
+  "Zurück ins Regal holen": "Bring back to the shelf",
+  "Dieses Album liegt im Archiv. Beim Speichern wird es dort direkt geändert.": "This album is in the archive. Saving changes it there directly.",
+  "„{album}“ endgültig aus dem Archiv löschen?\n\nAlle {n} Titel werden im Archiv gelöscht. Das lässt sich nicht rückgängig machen.":
+    "Delete “{album}” permanently from the archive?\n\nAll {n} tracks are deleted in the archive. This cannot be undone.",
+  "„{album}“ zurück ins Regal holen?\n\nDas Album wird ins Regal kopiert und danach im Archiv gelöscht.":
+    "Bring “{album}” back to the shelf?\n\nThe album is copied to the shelf and then deleted in the archive.",
+  "„{album}“ liegt wieder im Regal ({n} Dateien)": "“{album}” is back on the shelf ({n} files)",
+  "Liest das Archiv ein: {a} von {b}": "Reading the archive: {a} of {b}",
+  "Liest das Archiv ein": "Reading the archive",
+  "Archiv neu einlesen": "Re-read archive",
+  "Alle Alben im Archiv sind erkannt.": "All albums in the archive are identified.",
+  "Das Archiv wird eingelesen …": "Reading the archive …",
+  "Im Archiv liegen noch keine Alben.": "There are no albums in the archive yet.",
+  "Wird ins Regal zurückgeholt": "Bringing back to the shelf",
   "„{album}“ endgültig löschen?\n\nAlle {n} Titel werden von der Festplatte gelöscht. Das lässt sich nicht rückgängig machen.":
     "Delete “{album}” permanently?\n\nAll {n} tracks are deleted from the disk. This cannot be undone.",
   "„{album}“ gelöscht": "“{album}” deleted",
@@ -605,7 +632,11 @@ function toast(text, bad = false) {
 /* ---------- Regal ---------- */
 async function loadAlbums() {
   try {
-    state.albums = (await api("/api/albums")).albums;
+    const source = state.source;
+    const data = await api(inArchive() ? "/api/archive/albums" : "/api/albums");
+    if (source !== state.source) return;  // inzwischen umgeschaltet
+    state.albums = data.albums;
+    state.scan = data.scan || null;
     renderRack(); renderRip();
   } catch (e) { toast(e.message, true); }
 }
@@ -661,7 +692,8 @@ function renderArchiveProgress() {
   box.hidden = !a;
   if (!a) return;
   $("#arch-name").textContent = a.name;
-  $("#arch-title").textContent = a.phase === "verify" ? t("Kopie wird geprüft") : t("Wird ins Archiv kopiert");
+  $("#arch-title").textContent = a.phase === "verify" ? t("Kopie wird geprüft")
+    : a.phase === "restore" ? t("Wird ins Regal zurückgeholt") : t("Wird ins Archiv kopiert");
   $("#arch-count").textContent = t("Datei {a} von {b}", { a: a.file, b: a.files });
   $("#arch-bar").firstElementChild.style.width = `${a.percent}%`;
   $("#arch-bar").setAttribute("aria-valuenow", a.percent);
@@ -681,6 +713,9 @@ async function cancelRip() {
 const ICON_DOWNLOAD = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2v8M4.8 6.8 8 10l3.2-3.2M2.5 11.5v2h11v-2"/></svg>';
 const ICON_ARCHIVE = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h12v3H2zM3 6v7.5h10V6M6.3 9h3.4"/></svg>';
 const ICON_TRASH = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11M6 4.5V2.5h4v2M4 4.5l.7 9h6.6l.7-9M6.7 7v4M9.3 7v4"/></svg>';
+const inArchive = () => state.source === "archive";
+const apiBase = () => inArchive() ? "/api/archive" : "/api";
+const ICON_RESTORE = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h12v3H2zM3 6v7.5h10V6M8 12.5V8M6 9.8 8 7.8l2 2"/></svg>';
 function spineHtml(a, sub) {
   const tags = (a.busy ? `<span class="tag busy">${esc(t("wird gerippt"))}</span> ` : "") +
     (a.incomplete ? `<span class="tag warn">${esc(t("unvollständig"))}</span> ` : "");
@@ -688,17 +723,21 @@ function spineHtml(a, sub) {
   if (a.unknown) text = `<b>${esc(t("Unbeschriftete CD"))}</b><span>${tags}<span class="tag flag">${esc(t("nicht erkannt"))}</span> ${esc(a.disc_id ? t("Disc-ID {id}", { id: a.disc_id }) : "")}</span>`;
   else if (sub) text = `<b>${esc(a.album || t("Ohne Albumtitel"))}</b>${tags ? `<span>${tags}</span>` : ""}`;
   else text = `<b>${esc(a.artist || t("Ohne Interpret"))}</b><span>${tags}${esc(a.album || t("Ohne Albumtitel"))}</span>`;
-  const canDrag = !a.multi && !a.busy, canDrop = !a.unknown && !a.busy;
+  const canDrag = !inArchive() && !a.multi && !a.busy, canDrop = !inArchive() && !a.unknown && !a.busy;
   const off = a.busy || !!state.archiving || !!state.archiveAll;
+  const base = apiBase(), q = encodeURIComponent(a.path);
+  const middle = inArchive()
+    ? `<button type="button" class="iconbtn" data-act="restore" data-path="${esc(a.path)}" title="${esc(t("Zurück ins Regal holen"))}" aria-label="${esc(t("Zurück ins Regal holen"))}" ${off ? "disabled" : ""}>${ICON_RESTORE}</button>`
+    : `<button type="button" class="iconbtn" data-act="archive" data-path="${esc(a.path)}" title="${esc(t("In Archiv verschieben"))}" aria-label="${esc(t("In Archiv verschieben"))}" ${off ? "disabled" : ""}>${ICON_ARCHIVE}</button>`;
   const count = a.busy && a.track_total ? t("{a} von {b} Titel", { a: a.tracks, b: a.track_total }) : tracksText(a.tracks);
   return `<li><div role="button" tabindex="0" class="spine${a.unknown ? " unknown" : ""}${sub ? " sub" : ""}" data-path="${esc(a.path)}" aria-current="${a.path === state.path}"
     draggable="${canDrag}" data-drop="${canDrop}" ${canDrag ? `title="${esc(t("Zum Hinzufügen auf ein Album ziehen"))}"` : ""}>
-    ${a.unknown ? "" : `<span class="spine-art" style="background-image:url('/api/cover?path=${encodeURIComponent(a.path).replace(/'/g, "%27")}&amp;size=240&amp;t=${encodeURIComponent(a.modified || "")}')"></span>`}
+    ${a.unknown ? "" : `<span class="spine-art" style="background-image:url('${base}/cover?path=${q.replace(/'/g, "%27")}&amp;size=240&amp;t=${encodeURIComponent(a.modified || "")}')"></span>`}
     <span class="spine-text">${text}</span>
     <span class="spine-meta">${esc(a.year)}<br>${a.discs ? esc(t("{n} CDs, ", { n: a.discs })) : ""}${esc(count)}, ${esc(a.format)}</span></div>
     <span class="spine-actions">
-      <a class="iconbtn" href="/api/zip?path=${encodeURIComponent(a.path)}" download draggable="false" title="${esc(t("Als ZIP herunterladen"))}" aria-label="${esc(t("Als ZIP herunterladen"))}" ${off ? 'aria-disabled="true" tabindex="-1"' : ""}>${ICON_DOWNLOAD}</a>
-      <button type="button" class="iconbtn" data-act="archive" data-path="${esc(a.path)}" title="${esc(t("In Archiv verschieben"))}" aria-label="${esc(t("In Archiv verschieben"))}" ${off ? "disabled" : ""}>${ICON_ARCHIVE}</button>
+      <a class="iconbtn" href="${base}/zip?path=${q}" download draggable="false" title="${esc(t("Als ZIP herunterladen"))}" aria-label="${esc(t("Als ZIP herunterladen"))}" ${off ? 'aria-disabled="true" tabindex="-1"' : ""}>${ICON_DOWNLOAD}</a>
+      ${middle}
       <button type="button" class="iconbtn danger" data-act="delete" data-path="${esc(a.path)}" title="${esc(t("Album löschen"))}" aria-label="${esc(t("Album löschen"))}" ${off ? "disabled" : ""}>${ICON_TRASH}</button>
     </span></li>`;
 }
@@ -716,9 +755,12 @@ function renderRack() {
     (!q || `${a.artist} ${a.album} ${a.path}`.toLowerCase().includes(q)));
   const el = $("#spines");
   if (!list.length) {
+    const scan = state.scan || {};
     el.innerHTML = `<li class="empty">${esc(state.albums.length
-      ? (state.onlyUnknown && !q ? t("Alle CDs im Regal sind erkannt.") : t("Nichts gefunden."))
-      : t("Das Regal ist noch leer. Leg eine Audio-CD ein, dann erscheint sie hier."))}</li>`;
+      ? (state.onlyUnknown && !q ? t(inArchive() ? "Alle Alben im Archiv sind erkannt." : "Alle CDs im Regal sind erkannt.") : t("Nichts gefunden."))
+      : inArchive()
+        ? (scan.error ? scan.error : scan.running ? t("Das Archiv wird eingelesen …") : t("Im Archiv liegen noch keine Alben."))
+        : t("Das Regal ist noch leer. Leg eine Audio-CD ein, dann erscheint sie hier."))}</li>`;
     return;
   }
   // Aufeinanderfolgende Alben desselben Interpreten zusammenfassen (die Liste ist nach Interpret sortiert)
@@ -761,7 +803,7 @@ function stopPlayback() {
 function togglePlay(index) {
   const track = state.form.tracks[index];
   if (state.playing === track.file) return stopPlayback();
-  player.src = `/api/audio?path=${encodeURIComponent(state.form.path)}&file=${encodeURIComponent(track.file)}`;
+  player.src = `${apiBase()}/audio?path=${encodeURIComponent(state.form.path)}&file=${encodeURIComponent(track.file)}`;
   state.playing = track.file; refreshPlayButtons();
   player.play().catch(() => { /* Fehler meldet das error-Ereignis */ });
 }
@@ -777,7 +819,7 @@ async function openAlbum(path) {
   if (state.dirty && path !== state.path && !confirm(t("Ungespeicherte Änderungen verwerfen?"))) return;
   stopPlayback();
   try {
-    const album = await api("/api/album?path=" + encodeURIComponent(path));
+    const album = await api(apiBase() + "/album?path=" + encodeURIComponent(path));
     state.path = album.path; state.form = album; state.dirty = false;
     state.results = null; state.release = null; state.searchError = ""; state.coverUrl = ""; state.coverData = "";
     state.query = album.unknown ? "" : `${album.artist} ${album.album}`.trim();
@@ -806,7 +848,7 @@ function renderDetail() {
     ? `<img src="${state.coverData}" alt="${esc(t("Neues Cover, noch nicht gespeichert"))}">`
     : state.coverUrl
     ? `<img src="${esc(state.coverUrl)}" alt="${esc(t("Cover von Discogs"))}">`
-    : `<img src="/api/cover?path=${encodeURIComponent(f.path)}&t=${Date.now()}" alt="" data-fallback="${esc(t("Kein Cover"))}" onerror="this.replaceWith(document.createTextNode(this.dataset.fallback))">`;
+    : `<img src="${apiBase()}/cover?path=${encodeURIComponent(f.path)}&t=${Date.now()}" alt="" data-fallback="${esc(t("Kein Cover"))}" onerror="this.replaceWith(document.createTextNode(this.dataset.fallback))">`;
 
   let notice = "";
   if (f.busy) notice = `<p class="notice info">${esc(f.multi
@@ -849,6 +891,7 @@ function renderDetail() {
 
   el.innerHTML = `<div class="detail-inner">
     <button class="btn back" id="back">${esc(t("Zurück zum Regal"))}</button>
+    ${inArchive() ? `<p class="archive-note">${esc(t("Dieses Album liegt im Archiv. Beim Speichern wird es dort direkt geändert."))}</p>` : ""}
     <div class="album-head">
       <div class="cover-col">
         <div class="cover">${cover}</div>
@@ -1051,21 +1094,75 @@ async function deleteAlbum(path) {
   if (!f || state.archiving || state.archiveAll) return;
   const name = f.unknown ? t("Unbeschriftete CD") : `${f.artist} - ${f.album}`;
   const count = Array.isArray(f.tracks) ? f.tracks.length : f.tracks;
-  if (!confirm(t("„{album}“ endgültig löschen?\n\nAlle {n} Titel werden von der Festplatte gelöscht. Das lässt sich nicht rückgängig machen.", { album: name, n: count }))) return;
+  if (!confirm(t(inArchive()
+      ? "„{album}“ endgültig aus dem Archiv löschen?\n\nAlle {n} Titel werden im Archiv gelöscht. Das lässt sich nicht rückgängig machen."
+      : "„{album}“ endgültig löschen?\n\nAlle {n} Titel werden von der Festplatte gelöscht. Das lässt sich nicht rückgängig machen.", { album: name, n: count }))) return;
   const isOpen = state.form && state.form.path === f.path;
   if (isOpen) stopPlayback();
   try {
-    await api("/api/delete?path=" + encodeURIComponent(f.path), { method: "POST" });
+    await api((inArchive() ? "/api/archive/delete" : "/api/delete") + "?path=" + encodeURIComponent(f.path), { method: "POST" });
     if (state.form && state.form.path === f.path) { state.dirty = false; closeAlbum(); }
     await loadAlbums();
     toast(t("„{album}“ gelöscht", { album: name }));
   } catch (e) { toast(e.message, true); loadAlbums(); }
 }
 
+// Album aus dem Archiv zurück ins Regal holen
+async function restoreAlbum(path) {
+  const f = state.albums.find(a => a.path === path);
+  if (!f || state.archiving) return;
+  if (state.form && state.form.path === f.path && state.dirty) return toast(t("Bitte zuerst die ungespeicherten Änderungen speichern."), true);
+  const name = f.unknown ? t("Unbeschriftete CD") : `${f.artist} - ${f.album}`;
+  if (!confirm(t("„{album}“ zurück ins Regal holen?\n\nDas Album wird ins Regal kopiert und danach im Archiv gelöscht.", { album: name }))) return;
+  if (state.form && state.form.path === f.path) stopPlayback();
+  state.archiving = true; renderRack();
+  try {
+    const res = await api("/api/archive/restore?path=" + encodeURIComponent(f.path), { method: "POST" });
+    state.archiving = false;
+    if (state.form && state.form.path === f.path) closeAlbum();
+    await loadAlbums();
+    toast(t("„{album}“ liegt wieder im Regal ({n} Dateien)", { album: name, n: res.files }));
+  } catch (e) { state.archiving = false; toast(e.message, true); loadAlbums(); }
+}
+
+// Ansicht wechseln: Regal oder Archiv
+async function switchSource(source) {
+  if (source === state.source) return;
+  if (state.dirty && !confirm(t("Ungespeicherte Änderungen verwerfen?"))) return;
+  closeAlbum();
+  state.source = source; state.albums = []; state.scan = null; state.onlyUnknown = false;
+  try { localStorage.setItem("shelfripper-source", source); } catch (e) { /* ohne Speicher geht es auch */ }
+  applySourceButtons();
+  renderRack();
+  await loadAlbums();
+}
+
+function applySourceButtons() {
+  $("#src-shelf").setAttribute("aria-pressed", state.source === "shelf");
+  $("#src-archive").setAttribute("aria-pressed", state.source === "archive");
+  const filter = $("#filter");
+  filter.dataset.i18nPh = filter.dataset.i18nLabel = inArchive() ? "Im Archiv suchen" : "Im Regal suchen";
+  filter.placeholder = t(filter.dataset.i18nPh); filter.setAttribute("aria-label", filter.placeholder);
+}
+
+async function rescanArchive() {
+  try { await api("/api/archive/rescan", { method: "POST" }); } catch (e) { return toast(e.message, true); }
+  state.scan = { running: true, done: 0, total: 0 };
+  renderArchiveAll();
+}
+
 // Alle erkannten Alben nacheinander verschieben. Nicht erkannte CDs bleiben im Regal.
 const archivable = () => state.albums.filter(a => !a.unknown && !a.busy && !a.incomplete);
 function renderArchiveAll() {
   const button = $("#archive-all"), job = state.archiveAll;
+  if (inArchive()) {  // im Archiv: neu einlesen statt alle verschieben
+    const scan = state.scan || {};
+    button.disabled = !!scan.running;
+    button.textContent = scan.running
+      ? (scan.total ? t("Liest das Archiv ein: {a} von {b}", { a: scan.done, b: scan.total }) : t("Liest das Archiv ein"))
+      : t("Archiv neu einlesen");
+    return;
+  }
   button.disabled = !!job || state.archiving || !archivable().length;
   button.textContent = job ? t("Verschiebe {i} von {n}", job) : t("Alle ins Archiv verschieben");
 }
@@ -1179,7 +1276,7 @@ async function save() {
     const body = { artist: f.artist, album: f.album, year: f.year, genre: f.genre, discnumber: f.discnumber, disctotal: f.disctotal,
       label: f.label, catno: f.catno, discogs_id: f.discogs_id, cover_url: state.coverUrl || "", cover_data: state.coverData || "",
       tracks: f.tracks.map(tr => ({ file: tr.file, number: tr.number, title: tr.title, artist: tr.artist })) };
-    const res = await api("/api/album?path=" + encodeURIComponent(f.path), {
+    const res = await api(apiBase() + "/album?path=" + encodeURIComponent(f.path), {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     state.dirty = false; state.saving = false;
     await loadAlbums();
@@ -1275,7 +1372,11 @@ async function saveSettings() {
 const rack = $("#spines");
 rack.addEventListener("click", e => {
   const act = e.target.closest("[data-act]");
-  if (act) return act.dataset.act === "delete" ? deleteAlbum(act.dataset.path) : archiveAlbum(act.dataset.path);
+  if (act) {
+    if (act.dataset.act === "delete") return deleteAlbum(act.dataset.path);
+    if (act.dataset.act === "restore") return restoreAlbum(act.dataset.path);
+    return archiveAlbum(act.dataset.path);
+  }
   const b = e.target.closest(".spine"); if (b) openAlbum(b.dataset.path);
 });
 rack.addEventListener("keydown", e => {
@@ -1317,12 +1418,14 @@ $("#attach-ok").addEventListener("click", confirmAttach);
 $("#rip-cancel").addEventListener("click", cancelRip);
 $("#filter").addEventListener("input", e => { state.filter = e.target.value; renderRack(); });
 $("#chip-all").addEventListener("click", () => { state.onlyUnknown = false; renderRack(); });
+$("#src-shelf").addEventListener("click", () => switchSource("shelf"));
+$("#src-archive").addEventListener("click", () => switchSource("archive"));
 $("#chip-unknown").addEventListener("click", () => { state.onlyUnknown = true; renderRack(); });
 $("#open-settings").addEventListener("click", openSettings);
 $("#settings-cancel").addEventListener("click", () => $("#settings").close());
 $("#settings-save").addEventListener("click", saveSettings);
 $("#archive-test").addEventListener("click", testArchive);
-$("#archive-all").addEventListener("click", archiveAll);
+$("#archive-all").addEventListener("click", () => inArchive() ? rescanArchive() : archiveAll());
 $("#archive-path").addEventListener("input", updateArchiveFields);
 $("#save").addEventListener("click", save);
 $("#discard").addEventListener("click", () => { state.dirty = false; openAlbum(state.path); });
@@ -1352,17 +1455,20 @@ $("#detail").addEventListener("click", e => {
 window.addEventListener("beforeunload", e => { if (state.dirty) e.preventDefault(); });
 
 (async function init() {
+  try { if (localStorage.getItem("shelfripper-source") === "archive") state.source = "archive"; } catch (e) { /* egal */ }
+  applySourceButtons();
   applyStaticTexts(); renderDetail();
   await Promise.all([loadSettings(), loadAlbums()]);
   renderAll();
   loadRip();
   setInterval(loadRip, 2000);
+  setInterval(() => { if (inArchive() && state.scan && state.scan.running) loadAlbums(); }, 2000);  // Einlesen verfolgen
   setInterval(() => { if (state.archiving || state.archiveAll || (state.rip || {}).archive) loadRip(); }, 700);  // beim Archivieren öfter nachsehen
   setInterval(async () => {
     await loadAlbums();
     // Offenes Album auffrischen, solange es noch gerippt wird und nichts bearbeitet wurde
     if (state.form && state.form.busy && !state.dirty) {
-      try { state.form = await api("/api/album?path=" + encodeURIComponent(state.path)); renderDetail(); }
+      try { state.form = await api(apiBase() + "/album?path=" + encodeURIComponent(state.path)); renderDetail(); }
       catch (e) { state.form = null; state.path = null; renderDetail(); }
     }
   }, 8000);

@@ -3,6 +3,8 @@
 import base64
 import hashlib
 import shutil
+import sqlite3
+import tempfile
 import threading
 import zipfile
 import io
@@ -74,6 +76,21 @@ except OSError:
 # Meldungen entstehen im Code auf Deutsch; fuer die englische Oberflaeche werden sie hier uebersetzt.
 # {0}, {1} ... stehen fuer eingesetzte Werte.
 MESSAGES = [
+    ("Im Archiv wird gerade schon etwas gespeichert. Bitte kurz warten.",
+     "Something is already being saved in the archive. Please wait a moment."),
+    ("'{0}' gibt es im Archiv schon. Es wurde nichts geändert.", "'{0}' already exists in the archive. Nothing was changed."),
+    ("'{0}' liegt im Archiv als einzelne CD. Bitte dort zuerst die CD-Nummer eintragen.",
+     "'{0}' is a single CD in the archive. Please enter its CD number there first."),
+    ("Die Prüfsumme von '{0}' stimmt nach dem Schreiben nicht. Im Archiv wurde nichts geändert.",
+     "The checksum of '{0}' does not match after writing. Nothing was changed in the archive."),
+    ("Die neue Fassung liegt im Archiv, aber das Ersetzen der alten Dateien ist mittendrin gescheitert ({0}). "
+     "Bitte „Archiv neu einlesen“ und den Ordner prüfen.",
+     "The new version is in the archive, but replacing the old files failed halfway ({0}). "
+     "Please use “Re-read archive” and check the folder."),
+    ("'{0}' gibt es im Regal schon. Es wurde nichts verschoben.", "'{0}' already exists on the shelf. Nothing was moved."),
+    ("Das Album liegt wieder im Regal, ließ sich im Archiv aber nicht löschen ({0}). Bitte dort von Hand löschen.",
+     "The album is back on the shelf but could not be deleted in the archive ({0}). Please delete it there by hand."),
+    ("Die Prüfsumme von '{0}' stimmt nach dem Kopieren nicht.", "The checksum of '{0}' does not match after copying."),
     ("Unbekanntes Format.", "Unknown format."),
     ("Dieses Album wird gerade ins Archiv verschoben.", "This album is being moved to the archive right now."),
     ("Das Album ließ sich nicht vollständig löschen. Vermutlich hat ein anderes Programm den Ordner oder eine Datei geöffnet.",
@@ -427,8 +444,8 @@ def read_audio(path):
     return tags, round(audio.info.length) if audio.info else 0
 
 
-def rel_id(directory):
-    return directory.relative_to(OUTPUT).as_posix()
+def rel_id(directory, root=None):
+    return directory.relative_to(root or OUTPUT).as_posix()
 
 
 def ripper_status():
@@ -493,7 +510,7 @@ def disc_state(files, status):
             "incomplete": bool(total and total > len(files) and not busy)}
 
 
-def album_summary(directory, discs, status):
+def album_summary(directory, discs, status, root=None):
     states = [disc_state(files, status) for _number, _dir, files in discs]
     multi = discs[0][0] is not None
     tags = states[0]["tags"]
@@ -501,7 +518,7 @@ def album_summary(directory, discs, status):
     album = first(tags, "album")
     all_files = [f for _number, _dir, files in discs for f in files]
     return {
-        "path": rel_id(directory),
+        "path": rel_id(directory, root),
         "artist": artist,
         "album": album,
         "year": first(tags, "date")[:4],
@@ -760,11 +777,12 @@ def move_album(root, directory, target_dir):
             app.logger.warning("Schreibweise von %s nicht angleichbar (%r)", wanted, err)
 
 
-def real_path(path):
+def real_path(path, root=None):
     """Den Pfad in der Schreibweise liefern, die tatsaechlich auf dem Laufwerk steht."""
-    current = OUTPUT
+    root = root or OUTPUT
+    current = root
     try:
-        for part in path.relative_to(OUTPUT).parts:
+        for part in path.relative_to(root).parts:
             entries = list(current.iterdir())
             current = next((p for p in entries if p.name == part), None) \
                 or next(p for p in entries if p.name.lower() == part.lower())
@@ -922,13 +940,16 @@ def same_dir(a, b):
     return a.exists() and b.exists() and a.samefile(b)
 
 
-def save_album(directory, data, album_folder=None):
+def save_album(directory, data, album_folder=None, root=None):
+    """Tags schreiben und Dateien/Ordner benennen. root: Wurzel der Ablage (Regal, oder ein Arbeitsordner fuers Archiv)."""
+    root = root or OUTPUT
     discs = album_discs(directory)
     if not discs:
         raise ApiError("In diesem Ordner liegen keine Musikdateien.", 404)
     multi = discs[0][0] is not None
     files = {p.relative_to(directory).as_posix(): (number, p) for number, _dir, fs in discs for p in fs}
-    if album_summary(directory, discs, ripper_status())["busy"]:
+    status = ripper_status() if root == OUTPUT else {"state": "idle"}
+    if album_summary(directory, discs, status, root)["busy"]:
         raise ApiError("Diese CD wird gerade gerippt. Bitte warten, bis der Rip fertig ist.", 409)
 
     album = str(data.get("album") or "").strip()
@@ -972,7 +993,7 @@ def save_album(directory, data, album_folder=None):
 
     # Zielordner: Interpret/Album, bei mehreren CDs Interpret/Album/CD1, CD2, ...
     if album_folder is None:  # beim Hinzufuegen zu einem bestehenden Album steht der Ordner schon fest
-        album_folder = OUTPUT / safe_name("Various Artists" if various else albumartist, "Unbekannt") \
+        album_folder = root / safe_name("Various Artists" if various else albumartist, "Unbekannt") \
             / album_folder_name(album, data.get("year"))
     into_set = not multi and bool(discnumber and disctotal and disctotal > 1)
     if into_set:
@@ -989,7 +1010,7 @@ def save_album(directory, data, album_folder=None):
             if other and other[0][0] is not None and not multi:
                 raise ApiError(f"'{album}' ist bereits ein Album mit mehreren CDs. Trag bei „CD“ und „von“ ein, "
                                "welche CD das hier ist, dann wird sie dort einsortiert.", 409)
-            raise ApiError(f"Der Ordner '{rel_id(target_dir)}' existiert bereits.", 409)
+            raise ApiError(f"Der Ordner '{rel_id(target_dir, root)}' existiert bereits.", 409)
 
     if data.get("cover_data"):  # eigenes Bild hat Vorrang vor dem Discogs-Cover
         cover = decode_cover(data["cover_data"])
@@ -1043,7 +1064,7 @@ def save_album(directory, data, album_folder=None):
             rename(disc_dir, directory / f"CD{number}")
 
     # 3. Ordner verschieben
-    move_album(OUTPUT, directory, target_dir)
+    move_album(root, directory, target_dir)
 
     if into_set:  # Gesamtzahl der CDs im ganzen Album einheitlich halten
         album_parts = album_discs(album_folder)
@@ -1052,7 +1073,7 @@ def save_album(directory, data, album_folder=None):
             for path in part_files:
                 set_disc_total(path, total)
 
-    return rel_id(real_path(album_folder if into_set else target_dir))
+    return rel_id(real_path(album_folder if into_set else target_dir, root), root)
 
 
 # ---------------------------------------------------------------- Discogs
@@ -1469,6 +1490,15 @@ class LocalStore:
         if parts and path.is_dir() and not any(path.iterdir()):
             path.rmdir()
 
+    def scandir(self, parts):
+        """[(name, ist_ordner, groesse, aenderungszeit)]"""
+        result = []
+        with os.scandir(self._p(parts)) as entries:
+            for entry in entries:
+                info = entry.stat()
+                result.append((entry.name, entry.is_dir(), info.st_size, info.st_mtime))
+        return result
+
 
 # Namenszusaetze, unter denen Heimrouter die Geraete im Netz bekannt machen (FRITZ!Box: name.fritz.box)
 LAN_SUFFIXES = (".fritz.box", ".lan", ".home", ".home.arpa", ".local", ".localdomain", ".speedport.ip")
@@ -1563,6 +1593,22 @@ class SmbStore:
     def rmdir_if_empty(self, parts):
         if parts and not smbclient.listdir(self._p(parts), **self.options):
             smbclient.rmdir(self._p(parts), **self.options)
+
+    def scandir(self, parts):
+        """[(name, ist_ordner, groesse, aenderungszeit)]"""
+        result = []
+        for entry in smbclient.scandir(self._p(parts), **self.options):
+            if entry.name in (".", ".."):
+                continue
+            info = getattr(entry, "smb_info", None)  # steht schon in der Verzeichnisantwort: keine Extra-Anfrage
+            if info is not None:
+                stamp = info.last_write_time
+                result.append((entry.name, bool(info.file_attributes & 0x10), info.end_of_file,
+                               stamp.timestamp() if hasattr(stamp, "timestamp") else float(stamp or 0)))
+            else:
+                stat = entry.stat()
+                result.append((entry.name, entry.is_dir(), stat.st_size, stat.st_mtime))
+        return result
 
 
 def archive_store(target=None):
@@ -1723,6 +1769,7 @@ def _archive_album(directory):
         app.logger.exception("Original %s nach dem Archivieren nicht loeschbar", directory)
         raise ApiError("Das Album liegt vollständig und geprüft im Archiv, aber das Original im Regal ließ sich nicht "
                        f"löschen ({type(err).__name__}). Bitte den Ordner von Hand löschen.", 500)
+    archive_index_after_move(rel.as_posix())
     return {"files": len(files), "bytes": total, "target": rel.as_posix(), "verified": verify}
 
 
@@ -1739,10 +1786,10 @@ def load_discogs_map():
         return {}
 
 
-def remember_discogs(path):
+def remember_discogs(path, root=None):
     """Nach dem Speichern: jede CD des Albums, die mit Discogs getaggt ist, unter ihrer Disc-ID merken."""
     try:
-        directory = album_dir(path)
+        directory = album_dir(path) if root is None else root / path
         entries = {}
         for number, _disc_dir, files in album_discs(directory):
             if not files:
@@ -2167,6 +2214,611 @@ def api_discogs_search():
 @app.get("/api/discogs/release/<int:release_id>")
 def api_discogs_release(release_id):
     return jsonify(normalize_release(discogs_get(f"/releases/{release_id}")))
+
+
+# ---------------------------------------------------------------- Archiv ansehen und bearbeiten
+#
+# Das Archiv kann gross sein und im Netz liegen. Deshalb wird es einmal eingelesen und in einer kleinen
+# Datenbank (config/archive.db) gemerkt: je Album Interpret, Titel, Jahr, Titelzahl und ein kleines Cover.
+# Beim Neueinlesen werden nur Alben gelesen, deren Dateien sich geaendert haben.
+# Bearbeitet wird ueber einen Arbeitsordner: Album holen, wie im Regal taggen, zurueckschreiben.
+
+ARCHIVE_DB = CONFIG / "archive.db"
+NEW_SUFFIX = ".shelfripper-neu"  # neue Dateien heissen so, bis die alten ersetzt sind
+COVER_NAMES = ("cover.jpg", "folder.jpg", "cover.png")
+_db_lock = threading.Lock()
+_db_conn = None
+SCAN_STATE = {"running": False, "done": 0, "total": 0, "error": "", "finished": 0}
+
+
+def archive_db():
+    global _db_conn
+    if _db_conn is None:
+        _db_conn = sqlite3.connect(ARCHIVE_DB, check_same_thread=False)
+        _db_conn.execute("""CREATE TABLE IF NOT EXISTS albums (
+            path TEXT PRIMARY KEY, artist TEXT, album TEXT, year TEXT, genre TEXT, tracks INTEGER,
+            track_total INTEGER, discs INTEGER, format TEXT, disc_id TEXT, discogs_id TEXT,
+            signature TEXT, thumb BLOB, scanned REAL)""")
+        _db_conn.execute("CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)")
+        _db_conn.commit()
+    return _db_conn
+
+
+def archive_identity():
+    target = archive_settings()
+    return f"{target['kind']}:{target['path'].lower()}" if target["kind"] == "smb" else f"local:{ARCHIVE_ACTIVE}"
+
+
+def db_check_identity():
+    """Wurde ein anderes Archiv eingestellt, gilt die gemerkte Liste nicht mehr."""
+    with _db_lock:
+        db = archive_db()
+        row = db.execute("SELECT value FROM meta WHERE key='archive'").fetchone()
+        current = archive_identity()
+        if not row or row[0] != current:
+            db.execute("DELETE FROM albums")
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('archive', ?)", (current,))
+            db.execute("DELETE FROM meta WHERE key='scanned'")
+            db.commit()
+
+
+def archive_parts(rel):
+    """Albumpfad aus der Oberflaeche pruefen und als Teile liefern."""
+    parts = tuple(p for p in str(rel or "").replace("\\", "/").split("/") if p)
+    if not parts:
+        raise ApiError("Kein Album angegeben.")
+    if any(p in (".", "..") or p.startswith(".") or INVALID_CHARS.search(p) for p in parts):
+        raise ApiError("Ungültiger Pfad.")
+    return parts
+
+
+def is_audio_name(name):
+    return Path(name).suffix.lower() in AUDIO_SUFFIXES and not name.startswith(".")
+
+
+def store_album_listing(store, parts, entries=None):
+    """Dateien eines Archiv-Albums: [(relativer Name, groesse, zeit)] und die CD-Nummern; None, wenn es keins ist."""
+    entries = store.scandir(parts) if entries is None else entries
+    if any(name == ARCHIVE_MARKER for name, *_ in entries):
+        return None  # Kopie noch nicht fertig
+    files = [(name, size, mtime) for name, is_dir, size, mtime in entries if not is_dir]
+    if any(is_audio_name(name) for name, *_ in files):
+        return {"files": sorted(files), "discs": [None]}
+    discs, listing = [], [(name, size, mtime) for name, size, mtime in files]
+    for name, is_dir, _size, _mtime in entries:
+        match = DISC_DIR.match(name) if is_dir else None
+        if not match:
+            continue
+        sub = [(f"{name}/{n}", sz, mt) for n, d, sz, mt in store.scandir(parts + (name,)) if not d]
+        if any(is_audio_name(n.split("/", 1)[1]) for n, *_ in sub):
+            discs.append(int(match.group(1)))
+            listing += sub
+    if not discs:
+        return None
+    return {"files": sorted(listing), "discs": sorted(discs)}
+
+
+def listing_signature(listing):
+    raw = "\n".join(f"{n}|{s}|{int(m)}" for n, s, m in listing["files"])
+    return hashlib.sha1(raw.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def read_audio_obj(handle, name):
+    """Wie read_audio, aber aus einer geoeffneten Datei (auch auf der Netzwerkfreigabe)."""
+    if name.lower().endswith(".mp3"):
+        audio = MP3(handle)
+        id3 = audio.tags or {}
+        tags = {key: [str(t) for t in id3[frame].text] for key, frame in ID3_TEXT.items() if frame in id3}
+        if "TCON" in id3:
+            tags["genre"] = list(id3["TCON"].genres)
+        for frame, number, total in (("TRCK", "tracknumber", "tracktotal"), ("TPOS", "discnumber", "disctotal")):
+            if frame in id3:
+                parts = str(id3[frame].text[0]).split("/")
+                tags[number] = [parts[0]]
+                if len(parts) > 1:
+                    tags[total] = [parts[1]]
+        for frame in (id3.getall("TXXX") if id3 else []):
+            tags[frame.desc.lower()] = [str(t) for t in frame.text]
+        pictures = [(f.data, f.mime) for f in id3.getall("APIC")] if id3 else []
+    else:
+        audio = FLAC(handle)
+        tags = audio.tags.as_dict() if audio.tags else {}
+        pictures = [(p.data, p.mime) for p in audio.pictures]
+    return tags, (round(audio.info.length) if audio.info else 0), pictures
+
+
+def store_read_audio(store, parts, name):
+    with store.open(parts + tuple(name.split("/")), "rb") as handle:
+        return read_audio_obj(handle, name)
+
+
+def store_cover(store, parts, listing):
+    """Cover eines Archiv-Albums: Bilddatei im Ordner, sonst das in den ersten Titel eingebettete Bild."""
+    names = {n.lower(): n for n, *_ in listing["files"]}
+    for wanted in COVER_NAMES:
+        for prefix in ("",) + tuple(f"cd{d}/" for d in listing["discs"] if d):
+            real = names.get(prefix + wanted)
+            if real:
+                with store.open(parts + tuple(real.split("/")), "rb") as handle:
+                    return handle.read(), "image/png" if real.lower().endswith(".png") else "image/jpeg"
+    first_audio = next((n for n, *_ in listing["files"] if is_audio_name(n.rsplit("/", 1)[-1])), None)
+    if first_audio:
+        pictures = store_read_audio(store, parts, first_audio)[2]
+        if pictures:
+            return pictures[0][0], pictures[0][1] or "image/jpeg"
+    return None
+
+
+def index_archive_album(store, parts, listing=None):
+    """Ein Album aus dem Archiv lesen und in der Datenbank merken (oder entfernen, wenn es keins mehr ist)."""
+    rel = "/".join(parts)
+    listing = listing or (store_album_listing(store, parts) if store.exists(parts) else None)
+    if not listing:
+        with _db_lock:
+            archive_db().execute("DELETE FROM albums WHERE path=?", (rel,))
+            archive_db().commit()
+        return None
+    audio = [n for n, *_ in listing["files"] if is_audio_name(n.rsplit("/", 1)[-1])]
+    tags, _length, pictures = store_read_audio(store, parts, audio[0])
+    thumb = None
+    try:
+        names = {n.lower() for n, *_ in listing["files"]}
+        cover = None
+        if not pictures or any(c in names for c in COVER_NAMES):
+            cover = store_cover(store, parts, listing)
+        elif pictures:
+            cover = (pictures[0][0], pictures[0][1] or "image/jpeg")
+        if cover:
+            thumb = cover_thumb(cover, 240)[0]
+    except Exception as err:
+        app.logger.warning("Cover von %s im Archiv nicht lesbar: %r", rel, err)
+    multi = listing["discs"] != [None]
+    row = (
+        rel, first(tags, "albumartist") or first(tags, "artist") or (parts[0] if len(parts) > 1 else ""),
+        first(tags, "album") or parts[-1], first(tags, "date")[:4], "; ".join(tags.get("genre", [])),
+        len(audio), None if multi else to_int(first(tags, "tracktotal")), len(listing["discs"]) if multi else 0,
+        "/".join(sorted({Path(n).suffix.lower()[1:].upper() for n in audio})), first(tags, "cddb").lower(),
+        first(tags, "discogs_release_id"), listing_signature(listing), thumb, time.time(),
+    )
+    with _db_lock:
+        archive_db().execute("INSERT OR REPLACE INTO albums VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", row)
+        archive_db().commit()
+    return rel
+
+
+def walk_archive(store):
+    """Alle Alben im Archiv finden (Interpret/Album oder tiefer) - liefert [(teile, listing, eintraege)]."""
+    found = []
+
+    def visit(parts, depth):
+        try:
+            entries = store.scandir(parts)
+        except Exception as err:
+            app.logger.warning("Archivordner %s nicht lesbar: %r", "/".join(parts) or "/", err)
+            return
+        if parts:
+            listing = store_album_listing(store, parts, entries)
+            if listing:
+                found.append((parts, listing))
+                return
+            if any(name == ARCHIVE_MARKER for name, *_ in entries):
+                return
+        if depth >= 4:
+            return
+        for name, is_dir, _size, _mtime in sorted(entries):
+            if is_dir and not name.startswith(".") and not (parts and DISC_DIR.match(name)):
+                visit(parts + (name,), depth + 1)
+
+    visit((), 0)
+    return found
+
+
+def scan_archive():
+    """Archiv einlesen (im Hintergrund). Unveraenderte Alben werden uebersprungen."""
+    if SCAN_STATE["running"]:
+        return
+    SCAN_STATE.update(running=True, done=0, total=0, error="")
+    try:
+        db_check_identity()
+        store = archive_store()
+        store.check()
+        albums = walk_archive(store)
+        SCAN_STATE["total"] = len(albums)
+        with _db_lock:
+            known = dict(archive_db().execute("SELECT path, signature FROM albums").fetchall())
+        seen = set()
+        for parts, listing in albums:
+            rel = "/".join(parts)
+            seen.add(rel)
+            if known.get(rel) != listing_signature(listing):
+                try:
+                    index_archive_album(store, parts, listing)
+                except Exception as err:
+                    app.logger.warning("Album %s im Archiv nicht lesbar: %r", rel, err)
+            SCAN_STATE["done"] += 1
+        with _db_lock:
+            db = archive_db()
+            for rel in set(known) - seen:
+                db.execute("DELETE FROM albums WHERE path=?", (rel,))
+            db.execute("INSERT OR REPLACE INTO meta VALUES ('scanned', ?)", (str(time.time()),))
+            db.commit()
+    except ApiError as err:
+        SCAN_STATE["error"] = err.message
+    except Exception as err:
+        app.logger.warning("Archiv nicht einlesbar: %r", err)
+        SCAN_STATE["error"] = archive_error(err)
+    finally:
+        SCAN_STATE.update(running=False, finished=time.time())
+
+
+def start_archive_scan():
+    if not SCAN_STATE["running"]:
+        threading.Thread(target=scan_archive, name="archive-scan", daemon=True).start()
+
+
+def archive_index_after_move(rel):
+    """Nach dem Verschieben ins Archiv das Album gleich in die Liste aufnehmen."""
+    try:
+        db_check_identity()
+        index_archive_album(archive_store(), archive_parts(rel))
+    except Exception as err:
+        app.logger.warning("Archiv-Liste für %s nicht aktualisiert: %r", rel, err)
+
+
+def archive_row(row):
+    (path, artist, album, year, genre, tracks, track_total, discs, fmt, disc_id, discogs_id, signature) = row
+    folder = path.rsplit("/", 1)[-1]
+    return {
+        "path": path, "artist": artist or "", "album": album or "", "year": year or "", "genre": genre or "",
+        "tracks": tracks or 0, "track_total": track_total, "discs": discs or 0, "multi": bool(discs),
+        "format": fmt or "", "disc_id": disc_id or "", "discogs_id": discogs_id or "", "modified": signature,
+        "unknown": is_unknown(artist or "", album or "", Path(folder)), "busy": False,
+        "incomplete": bool(track_total and not discs and track_total > (tracks or 0)), "source": "archive",
+    }
+
+
+@app.get("/api/archive/albums")
+def api_archive_albums():
+    db_check_identity()
+    with _db_lock:
+        rows = archive_db().execute("SELECT path, artist, album, year, genre, tracks, track_total, discs, format, "
+                                    "disc_id, discogs_id, signature FROM albums").fetchall()
+        scanned = archive_db().execute("SELECT value FROM meta WHERE key='scanned'").fetchone()
+    if not scanned and not SCAN_STATE["running"] and not SCAN_STATE["error"]:
+        start_archive_scan()  # zum ersten Mal: von selbst einlesen
+    albums = [archive_row(r) for r in rows]
+    albums.sort(key=lambda a: (not a["unknown"], a["artist"].lower(), a["album"].lower(), a["path"]))
+    return jsonify({"albums": albums, "scan": dict(SCAN_STATE, error=translate(SCAN_STATE["error"])),
+                    "scanned": float(scanned[0]) if scanned else None})
+
+
+@app.post("/api/archive/rescan")
+def api_archive_rescan():
+    start_archive_scan()
+    return jsonify({"ok": True})
+
+
+def archive_listing_or_404(store, parts):
+    try:
+        listing = store_album_listing(store, parts) if store.exists(parts) else None
+    except ApiError:
+        raise
+    except Exception as err:
+        raise ApiError(archive_error(err), 502)
+    if not listing:
+        index_archive_album(store, parts, None)  # aus der Liste nehmen
+        raise ApiError("Album nicht gefunden.", 404)
+    return listing
+
+
+@app.get("/api/archive/album")
+def api_archive_album():
+    parts = archive_parts(request.args.get("path"))
+    store = archive_store()
+    listing = archive_listing_or_404(store, parts)
+    tracks, head = [], None
+    for name, *_ in listing["files"]:
+        if not is_audio_name(name.rsplit("/", 1)[-1]):
+            continue
+        tags, length, _pictures = store_read_audio(store, parts, name)
+        head = head or tags
+        disc = to_int(name.split("/", 1)[0][2:]) if "/" in name else None
+        tracks.append({"file": name, "disc": disc,
+                       "number": to_int(first(tags, "tracknumber")) or len([t for t in tracks if t["disc"] == disc]) + 1,
+                       "title": first(tags, "title"), "artist": first(tags, "artist"), "length": length})
+    multi = listing["discs"] != [None]
+    artist = first(head, "albumartist") or first(head, "artist")
+    album = first(head, "album")
+    total = to_int(first(head, "tracktotal"))
+    signature = listing_signature(listing)
+    return jsonify({
+        "path": "/".join(parts), "artist": artist, "album": album, "year": first(head, "date")[:4],
+        "tracks": tracks, "track_total": None if multi else total, "multi": multi,
+        "discs": len(listing["discs"]) if multi else 0, "unknown": is_unknown(artist, album, Path(parts[-1])),
+        "busy": False, "incomplete": bool(total and not multi and total > len(tracks)),
+        "disc_id": first(head, "cddb"), "modified": signature, "source": "archive",
+        "format": "/".join(sorted({Path(t["file"]).suffix.lower()[1:].upper() for t in tracks})),
+        "genre": "; ".join(head.get("genre", [])),
+        "discnumber": "" if multi else to_int(first(head, "discnumber")) or "",
+        "disctotal": max(to_int(first(head, "disctotal")) or 0, listing["discs"][-1], len(listing["discs"])) if multi
+        else to_int(first(head, "disctotal")) or "",
+        "label": first(head, "label"), "catno": first(head, "catalognumber"),
+        "discogs_id": first(head, "discogs_release_id"),
+    })
+
+
+@app.get("/api/archive/cover")
+def api_archive_cover():
+    parts = archive_parts(request.args.get("path"))
+    edge = to_int(request.args.get("size")) or 0
+    cover = None
+    if edge:
+        with _db_lock:
+            row = archive_db().execute("SELECT thumb FROM albums WHERE path=?", ("/".join(parts),)).fetchone()
+        cover = (row[0], "image/jpeg") if row and row[0] else None
+    else:
+        store = archive_store()
+        cover = store_cover(store, parts, archive_listing_or_404(store, parts))
+    if not cover:
+        return Response(status=404)
+    response = Response(cover[0], mimetype=cover[1])
+    response.headers["Cache-Control"] = "max-age=86400" if edge and request.args.get("t") else "no-cache"
+    return response
+
+
+@app.get("/api/archive/audio")
+def api_archive_audio():
+    """Titel aus dem Archiv zum Probehoeren ausliefern, mit Spulen (Range)."""
+    parts = archive_parts(request.args.get("path"))
+    name = request.args.get("file") or ""
+    store = archive_store()
+    listing = archive_listing_or_404(store, parts)
+    entry = next(((n, size) for n, size, _m in listing["files"] if n == name and is_audio_name(n.rsplit("/", 1)[-1])), None)
+    if entry is None:
+        raise ApiError("Titel nicht gefunden.", 404)
+    size = entry[1]
+    start, end = 0, size - 1
+    match = re.match(r"bytes=(\d*)-(\d*)", request.headers.get("Range", ""))
+    if match and (match.group(1) or match.group(2)):
+        if match.group(1):
+            start = int(match.group(1))
+            end = min(int(match.group(2)), size - 1) if match.group(2) else size - 1
+        else:
+            start = max(size - int(match.group(2)), 0)
+    if start > end:
+        return Response(status=416, headers={"Content-Range": f"bytes */{size}"})
+
+    def body():
+        with store.open(parts + tuple(name.split("/")), "rb") as handle:
+            handle.seek(start)
+            left = end - start + 1
+            while left > 0:
+                chunk = handle.read(min(256 * 1024, left))
+                if not chunk:
+                    break
+                left -= len(chunk)
+                yield chunk
+
+    headers = {"Accept-Ranges": "bytes", "Content-Length": str(end - start + 1), "Cache-Control": "no-cache"}
+    status = 200
+    if match and (match.group(1) or match.group(2)):
+        status = 206
+        headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+    return Response(body(), status=status, headers=headers,
+                    mimetype="audio/mpeg" if name.lower().endswith(".mp3") else "audio/flac")
+
+
+def copy_from_store(store, parts, listing, target, progress=None, verify=False):
+    """Album aus dem Archiv in einen lokalen Ordner kopieren (optional mit Pruefsumme)."""
+    total = sum(size for _n, size, _m in listing["files"]) or 1
+    done = 0
+    for index, (name, _size, _mtime) in enumerate(listing["files"], 1):
+        local = target.joinpath(*name.split("/"))
+        local.parent.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha256()
+        with store.open(parts + tuple(name.split("/")), "rb") as reader, open(local, "wb") as writer:
+            for chunk in iter(lambda: reader.read(1024 * 1024), b""):
+                writer.write(chunk)
+                digest.update(chunk)
+                done += len(chunk)
+                if progress:
+                    progress(index, len(listing["files"]), done * 100 // total)
+        if verify:
+            check = hashlib.sha256(local.read_bytes()).hexdigest()
+            if check != digest.hexdigest():
+                raise ApiError(f"Die Prüfsumme von '{name}' stimmt nach dem Kopieren nicht.", 500)
+
+
+def remove_store_album(store, parts, listing):
+    """Die Dateien eines Archiv-Albums loeschen und leer gewordene Ordner entfernen."""
+    for name, *_ in listing["files"]:
+        store.remove(parts + tuple(name.split("/")))
+    for disc in listing["discs"]:
+        if disc is not None:
+            for name, is_dir, *_ in store.scandir(parts):
+                if is_dir and DISC_DIR.match(name) and int(DISC_DIR.match(name).group(1)) == disc:
+                    store.rmdir_if_empty(parts + (name,))
+    for depth in range(len(parts), 0, -1):
+        try:
+            store.rmdir_if_empty(parts[:depth])
+        except Exception:
+            break
+
+
+def store_move_file(store, temp, dest):
+    """Datei im Archiv umbenennen; kann der Server das nicht, umkopieren."""
+    try:
+        store.rename(temp, dest)
+        return
+    except Exception as err:
+        app.logger.info("Umbenennen im Archiv nicht möglich (%r), kopiere stattdessen", err)
+    with store.open(temp, "rb") as reader, store.open(dest, "wb") as writer:
+        for chunk in iter(lambda: reader.read(1024 * 1024), b""):
+            writer.write(chunk)
+    store.remove(temp)
+
+
+ARCHIVE_EDIT_LOCK = threading.Lock()
+
+
+@app.post("/api/archive/album")
+def api_archive_album_save():
+    """Album im Archiv neu taggen: holen, wie im Regal bearbeiten, Ergebnis zurueckschreiben."""
+    parts = archive_parts(request.args.get("path"))
+    data = request.get_json(force=True) or {}
+    if not ARCHIVE_EDIT_LOCK.acquire(blocking=False):
+        raise ApiError("Im Archiv wird gerade schon etwas gespeichert. Bitte kurz warten.", 409)
+    work = Path(tempfile.mkdtemp(prefix="shelfripper-"))
+    try:
+        store = archive_store()
+        listing = archive_listing_or_404(store, parts)
+        old_rel = "/".join(parts)
+        try:
+            copy_from_store(store, parts, listing, work.joinpath(*parts))
+        except ApiError:
+            raise
+        except Exception as err:
+            raise ApiError(archive_error(err), 502)
+        new_rel = save_album(work.joinpath(*parts), data, root=work)
+        remember_discogs(new_rel, root=work)
+        new_dir = work.joinpath(*new_rel.split("/"))
+        # die Dateien des Ergebnisses (bei einem Mehrfach-Album nur die eben einsortierte CD)
+        produced = sorted(p for p in work.rglob("*") if p.is_file() and ".cdripper" not in p.relative_to(work).parts)
+        holder = Path(os.path.commonpath([str(p.parent) for p in produced]))  # Album- bzw. eben einsortierter CD-Ordner
+        target = tuple(holder.relative_to(work).parts)
+        if "/".join(target).lower() != old_rel.lower() and store.exists(target):
+            raise ApiError(f"'{'/'.join(target)}' gibt es im Archiv schon. Es wurde nichts geändert.", 409)
+        if len(target) > len(tuple(new_rel.split("/"))):  # einsortiert als CDn: Album darf keine Einzel-CD sein
+            album_parts = tuple(new_rel.split("/"))
+            if store.exists(album_parts) and any(is_audio_name(n) for n, d, *_ in store.scandir(album_parts) if not d):
+                raise ApiError(f"'{new_rel}' liegt im Archiv als einzelne CD. Bitte dort zuerst die CD-Nummer eintragen.", 409)
+        verify = archive_verify_on()
+        uploaded = []
+        try:
+            for path in produced:
+                dest = tuple(path.relative_to(work).parts)
+                store.makedirs(dest[:-1])
+                temp = dest[:-1] + (dest[-1] + NEW_SUFFIX,)
+                digest = hashlib.sha256()
+                with open(path, "rb") as reader, store.open(temp, "wb") as writer:
+                    for chunk in iter(lambda: reader.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                        writer.write(chunk)
+                uploaded.append((temp, dest))
+                if verify:
+                    check = hashlib.sha256()
+                    with store.open(temp, "rb") as reader:
+                        for chunk in iter(lambda: reader.read(1024 * 1024), b""):
+                            check.update(chunk)
+                    if check.hexdigest() != digest.hexdigest():
+                        raise ApiError(f"Die Prüfsumme von '{'/'.join(dest)}' stimmt nach dem Schreiben nicht. "
+                                       "Im Archiv wurde nichts geändert.", 500)
+        except Exception as err:
+            for temp, _dest in uploaded:
+                try:
+                    store.remove(temp)
+                except Exception:
+                    pass
+            if isinstance(err, ApiError):
+                raise
+            raise ApiError(archive_error(err), 502)
+        # Neue Fassung liegt vollstaendig im Archiv: alte Dateien weg, neue an ihren Platz
+        try:
+            remove_store_album(store, parts, listing)
+            for temp, dest in uploaded:
+                store_move_file(store, temp, dest)
+        except Exception as err:
+            app.logger.exception("Archiv-Album %s nicht vollständig ersetzt", old_rel)
+            raise ApiError("Die neue Fassung liegt im Archiv, aber das Ersetzen der alten Dateien ist mittendrin "
+                           f"gescheitert ({type(err).__name__}). Bitte „Archiv neu einlesen“ und den Ordner prüfen.", 500)
+        with _db_lock:
+            archive_db().execute("DELETE FROM albums WHERE path=?", (old_rel,))
+            archive_db().commit()
+        index_archive_album(store, tuple(new_rel.split("/")))
+        return jsonify({"path": new_rel})
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+        ARCHIVE_EDIT_LOCK.release()
+
+
+@app.post("/api/archive/restore")
+def api_archive_restore():
+    """Album aus dem Archiv zurueck ins Regal holen (erst kopieren, dann im Archiv loeschen)."""
+    parts = archive_parts(request.args.get("path"))
+    store = archive_store()
+    listing = archive_listing_or_404(store, parts)
+    target = OUTPUT.joinpath(*parts)
+    if target.exists():
+        raise ApiError(f"'{'/'.join(parts)}' gibt es im Regal schon. Es wurde nichts verschoben.", 409)
+    verify = archive_verify_on()
+
+    def progress(index, count, percent):
+        ARCHIVE_PROGRESS.update(path="/".join(parts), name=" - ".join(parts), file=index, files=count,
+                                phase="restore", percent=percent)
+    try:
+        copy_from_store(store, parts, listing, target, progress, verify)
+    except Exception as err:
+        shutil.rmtree(target, ignore_errors=True)
+        if target.parent != OUTPUT and target.parent.is_dir() and not any(target.parent.iterdir()):
+            target.parent.rmdir()
+        if isinstance(err, ApiError):
+            raise
+        raise ApiError(archive_error(err), 502)
+    finally:
+        ARCHIVE_PROGRESS.clear()
+    try:
+        remove_store_album(store, parts, listing)
+    except Exception as err:
+        app.logger.exception("Archiv-Album %s nach dem Zurueckholen nicht loeschbar", "/".join(parts))
+        raise ApiError("Das Album liegt wieder im Regal, ließ sich im Archiv aber nicht löschen "
+                       f"({type(err).__name__}). Bitte dort von Hand löschen.", 500)
+    finally:
+        index_archive_album(store, parts, None)
+    return jsonify({"path": "/".join(parts), "files": len(listing["files"])})
+
+
+@app.post("/api/archive/delete")
+def api_archive_delete():
+    parts = archive_parts(request.args.get("path"))
+    store = archive_store()
+    listing = archive_listing_or_404(store, parts)
+    try:
+        remove_store_album(store, parts, listing)
+    except Exception as err:
+        app.logger.warning("Archiv-Album %s nicht loeschbar: %r", "/".join(parts), err)
+        raise ApiError(archive_error(err), 502)
+    finally:
+        index_archive_album(store, parts, None)
+    app.logger.warning("Album im Archiv geloescht: %s", "/".join(parts))
+    return jsonify({"files": len(listing["files"])})
+
+
+@app.get("/api/archive/zip")
+def api_archive_zip():
+    parts = archive_parts(request.args.get("path"))
+    store = archive_store()
+    listing = archive_listing_or_404(store, parts)
+
+    def stream():
+        sink = _ZipSink()
+        with zipfile.ZipFile(sink, "w", zipfile.ZIP_STORED, allowZip64=True) as archive:
+            for name, _size, mtime in listing["files"]:
+                info = zipfile.ZipInfo("/".join(parts + tuple(name.split("/"))), time.localtime(mtime)[:6])
+                info.compress_type = zipfile.ZIP_STORED
+                with store.open(parts + tuple(name.split("/")), "rb") as source, archive.open(info, "w", force_zip64=True) as entry:
+                    for chunk in iter(lambda: source.read(1024 * 1024), b""):
+                        entry.write(chunk)
+                        yield sink.drain()
+                yield sink.drain()
+        yield sink.drain()
+
+    name = safe_name(" - ".join(parts), "Album") + ".zip"
+    plain = name.encode("ascii", "replace").decode().replace("?", "_").replace('"', "_")
+    return Response(stream(), mimetype="application/zip", headers={
+        "Content-Disposition": f"attachment; filename=\"{plain}\"; filename*=UTF-8''{requests.utils.quote(name)}",
+        "Cache-Control": "no-store",
+    })
+
 
 
 if __name__ == "__main__":
