@@ -88,7 +88,7 @@ body { display: flex; flex-direction: column; height: 100vh; }
 .spine-text > b { text-shadow: 0 0 6px var(--case), 0 0 2px var(--case); }
 /* Knöpfe je Album: erscheinen beim Überfahren, bei Tastaturfokus und am geöffneten Album */
 .spines li { position: relative; }
-.spine-actions { position: absolute; right: 7px; top: 1px; bottom: 4px; display: none; align-items: center; gap: 4px;
+.spine-actions { position: absolute; right: 3px; top: 2px; bottom: 5px; padding-right: 4px; display: none; align-items: center; gap: 4px;
   padding-left: 14px; background: linear-gradient(to right, transparent, var(--case) 12px); }
 .spines li:hover > .spine-actions, .spines li:focus-within > .spine-actions, .spine[aria-current="true"] + .spine-actions { display: flex; }
 .dragging-on .spine-actions { display: none !important; }
