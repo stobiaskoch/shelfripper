@@ -16,7 +16,7 @@
 - **Cover.** Nach jedem erkannten Rip automatisch aus dem [Cover Art Archive](https://coverartarchive.org/); sonst Suche über [COV](https://covers.musichoarders.xyz/), Datei hochladen oder Bild einfügen.
 - **Alben mit mehreren CDs** liegen als `Interpret/Album/CD1`, `CD2`, … und erscheinen als ein Album. Eine CD lässt sich per Drag & Drop auf ein Album ziehen.
 - **Fortschritt live** mit Titelzähler, dazu ein Knopf zum Abbrechen mit Auswurf.
-- **Archiv.** Fertige Alben in einen lokalen Ordner oder auf eine SMB-Freigabe verschieben, auf Wunsch per SHA-256 geprüft: einzeln, alle auf einmal oder automatisch nach jedem erkannten Rip.
+- **Archiv.** Fertige Alben in einen lokalen Ordner oder auf eine SMB-Freigabe verschieben, auf Wunsch per SHA-256 geprüft: einzeln, alle auf einmal oder automatisch nach jedem erkannten Rip. Über den Umschalter **Regal | Archiv** lassen sich archivierte Alben ansehen, anhören, neu taggen, herunterladen, löschen oder zurück ins Regal holen; das Archiv wird dafür in einer kleinen Datenbank (`config/archive.db`) gemerkt.
 - **Download als ZIP oder Löschen** direkt in der Albumliste, Abspielknopf je Titel, Jahr vor dem Albumordner (`1992 - Album`) zuschaltbar, Oberfläche auf Deutsch und Englisch.
 
 ## Installation unter Windows

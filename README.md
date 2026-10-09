@@ -16,7 +16,7 @@
 - **Covers.** Fetched automatically from the [Cover Art Archive](https://coverartarchive.org/) after each recognized rip; otherwise search via [COV](https://covers.musichoarders.xyz/), upload a file, or paste an image.
 - **Multi-disc albums** are kept as `Artist/Album/CD1`, `CD2`, … and shown as one album. Drag a CD onto an album to add it.
 - **Live progress** with track count, and a button to cancel the rip and eject the disc.
-- **Archive.** Move finished albums to a local folder or an SMB share, optionally verified by SHA-256, one by one, all at once, or automatically after each recognized rip.
+- **Archive.** Move finished albums to a local folder or an SMB share, optionally verified by SHA-256, one by one, all at once, or automatically after each recognized rip. Switch the album list between **Shelf | Archive** to browse, play, re-tag, download, delete or bring back albums that are already archived; the archive is indexed in a small database (`config/archive.db`).
 - **Download as ZIP or delete** right from the album list, play buttons per track, optional year prefix for album folders (`1992 - Album`), English and German interface.
 
 ## Installation on Windows
